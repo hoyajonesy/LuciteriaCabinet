@@ -1,9 +1,17 @@
 /**
  * Luciteria Collector Cabinet — Subscription Tier Configuration
  *
- * Maps Appstle selling plans to Cabinet assignment configuration. These
- * constants act as the source of truth / fallback when a matching
- * `SubscriptionTier` DB row is not (yet) present.
+ * @deprecated The database-backed `SubscriptionTier` table is now the source
+ *   of truth for tier configuration; use `app/lib/subscription-tiers-db.server.js`
+ *   (`getAllTiers`, `getTierByKey`, `getTierBySellingPlanId`,
+ *   `getTierByCollectionType`, `resolveTierKey`) instead. This file is retained
+ *   ONLY as a static fallback that the DB service reads from when a matching
+ *   `SubscriptionTier` row is not (yet) present (fresh installs, unseeded
+ *   tiers), and as the home of the payload → collection-type mapping
+ *   heuristics (`mapSellingPlanToCollectionType`). Do not add new consumers
+ *   that read these constants directly for live tier config.
+ *
+ * Maps Appstle selling plans to Cabinet assignment configuration.
  *
  * See docs/SUBSCRIPTION_ARCHITECTURE.md §7 for the full blueprint.
  *
@@ -130,6 +138,9 @@ export function mapSellingPlanToCollectionType(payload = {}) {
 
 /**
  * Resolve the tier key ("10mm_monthly" etc.) from a webhook payload.
+ * @deprecated Use the async `resolveTierKey` from
+ *   `app/lib/subscription-tiers-db.server.js`, which prefers a DB match on the
+ *   selling plan id. This config version is the heuristic fallback.
  * @param {Object} payload
  * @returns {string|null}
  */
@@ -144,6 +155,9 @@ export function resolveTierKey(payload = {}) {
 
 /**
  * Get tier config by collection type (falls back to lucite).
+ * @deprecated Use the async `getTierByCollectionType` from
+ *   `app/lib/subscription-tiers-db.server.js`, which reads the DB first. This
+ *   config version is the static fallback.
  * @param {string} collectionType
  * @returns {Object}
  */

@@ -22,7 +22,7 @@ import {
   STRATEGIES,
 } from "./assignment-engine.server.js";
 import { createSubscriptionDraftOrder } from "../integrations/appstle/appstle-draft-orders.server.js";
-import { getTierByCollectionType } from "../config/subscription-tiers.server.js";
+import { getTierByCollectionType } from "./subscription-tiers-db.server.js";
 
 const MODULE = "subscription-manager";
 
@@ -97,7 +97,7 @@ export async function runAssignment({
 }) {
   const ctx = await loadAssignmentContext(customer);
   const collectionType = subscription?.collectionType || customer.collectionType || "lucite";
-  const tier = getTierByCollectionType(collectionType);
+  const tier = await getTierByCollectionType(collectionType);
 
   // First shipment: no wishlist/history yet → fall back to OLDEST_MISSING.
   let strategy = STRATEGIES.WISHLIST_PRIORITY;
@@ -271,7 +271,7 @@ export async function processShipmentAssignment({
 export async function refreshAssignmentPreview({ customer, subscription, count = 4 }) {
   const ctx = await loadAssignmentContext(customer);
   const collectionType = subscription?.collectionType || customer.collectionType || "lucite";
-  const tier = getTierByCollectionType(collectionType);
+  const tier = await getTierByCollectionType(collectionType);
 
   const sequence = previewSequence({
     customer: { ...customer, collectionType },

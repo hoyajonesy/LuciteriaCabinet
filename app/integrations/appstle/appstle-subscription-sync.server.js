@@ -14,7 +14,8 @@ import { calculateNextBillingDate } from "../../lib/billing.server.js";
 import {
   getTierByCollectionType,
   resolveTierKey,
-} from "../../config/subscription-tiers.server.js";
+  invalidateTierCache,
+} from "../../lib/subscription-tiers-db.server.js";
 
 const MODULE = "appstle-subscription-sync";
 
@@ -41,31 +42,37 @@ function mapBillingCadence(interval, count = 1) {
  * @returns {Promise<Object|null>} the SubscriptionTier record
  */
 export async function ensureSubscriptionTier(payload) {
-  const tierKey = resolveTierKey(payload);
+  const tierKey = await resolveTierKey(payload);
   if (!tierKey) return null;
 
-  const cfg = getTierByCollectionType(payload.collectionType);
+  const cfg = await getTierByCollectionType(payload.collectionType);
   const sellingPlanId = payload.sellingPlanId || null;
 
   try {
     const existing = await prisma.subscriptionTier.findUnique({ where: { name: tierKey } });
     if (existing) {
       if (sellingPlanId && !existing.appstleSellingPlanId) {
-        return prisma.subscriptionTier.update({
+        const updated = await prisma.subscriptionTier.update({
           where: { id: existing.id },
           data: { appstleSellingPlanId: sellingPlanId },
         });
+        invalidateTierCache(); // selling-plan → tier map changed
+        return updated;
       }
       return existing;
     }
 
-    return await prisma.subscriptionTier.create({
+    const created = await prisma.subscriptionTier.create({
       data: {
         name: cfg.name,
         displayName: payload.sellingPlanName || cfg.displayName,
+        description: cfg.description ?? null,
         collectionType: cfg.collectionType,
+        allowedCollectionTypes: cfg.allowedCollectionTypes || [cfg.collectionType],
         appstleSellingPlanId: sellingPlanId,
         monthlyPrice: payload.price ?? cfg.monthlyPrice,
+        creditValue: cfg.creditValue ?? null,
+        discountPercentage: cfg.discountPercentage ?? cfg.maxDiscountPercent,
         billingInterval: payload.billingInterval || cfg.billingInterval,
         billingIntervalCount: payload.billingIntervalCount || cfg.billingIntervalCount,
         excludePreciousMetals: cfg.excludePreciousMetals,
@@ -74,8 +81,12 @@ export async function ensureSubscriptionTier(payload) {
         defaultStrategy: cfg.defaultStrategy,
         allowDuplicates: cfg.allowDuplicates,
         sortOrder: cfg.sortOrder,
+        displayOrder: cfg.displayOrder ?? cfg.sortOrder,
+        createdBy: "appstle-sync",
       },
     });
+    invalidateTierCache(); // a new tier row is now available
+    return created;
   } catch (err) {
     // Non-fatal: tier seeding is best-effort (unique clashes on selling plan id, etc.)
     logger.warn(MODULE, `ensureSubscriptionTier failed for ${tierKey}: ${err.message}`);
@@ -93,7 +104,8 @@ export async function ensureSubscriptionTier(payload) {
  * @returns {Promise<Object>} the Subscription record
  */
 export async function syncSubscription({ customer, payload, isNew = false }) {
-  const cfg = getTierByCollectionType(payload.collectionType);
+  const cfg = await getTierByCollectionType(payload.collectionType);
+  const tierKey = await resolveTierKey(payload);
   const now = new Date();
 
   const price = payload.price ?? cfg.monthlyPrice;
@@ -122,7 +134,7 @@ export async function syncSubscription({ customer, payload, isNew = false }) {
       priceUsd: price,
       nextBillingDate,
       planName: payload.sellingPlanName || subscription.planName,
-      planTier: resolveTierKey(payload) || subscription.planTier,
+      planTier: tierKey || subscription.planTier,
     };
     if (payload.subscriptionContractId && !subscription.appstleContractId) {
       data.appstleContractId = payload.subscriptionContractId;
@@ -154,7 +166,7 @@ export async function syncSubscription({ customer, payload, isNew = false }) {
       appstleSellingPlanId: payload.sellingPlanId || null,
       appstleSellingPlanName: payload.sellingPlanName || null,
       planName: payload.sellingPlanName || cfg.displayName,
-      planTier: resolveTierKey(payload) || cfg.name,
+      planTier: tierKey || cfg.name,
       status,
       billingCadence: mapBillingCadence(payload.billingInterval, payload.billingIntervalCount),
       priceUsd: price,

@@ -1030,33 +1030,47 @@ model AppstleWebhookLog {
 // Distinct from MembershipTier (which tracks store-credit tiers).
 model SubscriptionTier {
   id                   String  @id @default(uuid())
-  name                 String  @unique // "10mm_monthly", "25.4mm_monthly", "lucite_monthly"
+  name                 String  @unique // slug/key: "10mm_monthly", "25.4mm_monthly", "lucite_monthly"
   displayName          String // "10mm Cubes — Monthly"
-  collectionType       String // "10mm", "25.4mm", "lucite"
+  description          String? // Long-form marketing/admin description of the tier
+  collectionType       String // primary collection type: "10mm", "25.4mm", "lucite"
   appstleSellingPlanId String? @unique // Appstle selling plan GID
   shopifySellingPlanId String? @unique // Shopify selling plan GID
+  shopifyProductId     String? // Shopify product GID backing this subscription plan
 
-  monthlyPrice         Float // $29.99, $39.99, $49.99
-  billingInterval      String @default("MONTH") // MONTH, QUARTER
-  billingIntervalCount Int    @default(1)
+  // ── Pricing ──────────────────────────────────────────────
+  monthlyPrice         Float // canonical monthly price, e.g. 49.99
+  creditValue          Float? // store credit granted per cycle (if applicable)
+  discountPercentage   Float   @default(0.20) // subscriber discount applied to assigned items
+  billingInterval      String  @default("MONTH") // MONTH, QUARTER
+  billingIntervalCount Int     @default(1)
 
-  // Product eligibility rules
-  excludePreciousMetals Boolean @default(true) // Always true for Luciteria
-  maxDiscountPercent    Float   @default(0.20) // 20% default cap
-  itemsPerShipment      Int     @default(1)
+  // ── Product eligibility rules ────────────────────────────
+  // allowedCollectionTypes lets a tier span multiple collection types; when
+  // empty the singular `collectionType` is used.
+  allowedCollectionTypes String[] @default([])
+  excludePreciousMetals  Boolean  @default(true) // Always true for Luciteria
+  maxDiscountPercent     Float    @default(0.20) // hard discount cap
+  itemsPerShipment       Int      @default(1)
 
-  // Assignment strategy defaults
+  // ── Assignment strategy defaults ─────────────────────────
   defaultStrategy String  @default("wishlist_priority")
   allowDuplicates Boolean @default(false)
 
-  isActive  Boolean @default(true)
-  sortOrder Int     @default(0)
+  // ── Status ───────────────────────────────────────────────
+  isActive     Boolean @default(true)
+  sortOrder    Int     @default(0) // legacy display order (kept for compatibility)
+  displayOrder Int     @default(0) // admin-facing display order
 
+  // ── Timestamps & audit ───────────────────────────────────
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  createdBy String? // admin email/id who created the tier
+  updatedBy String? // admin email/id who last updated the tier
 
   @@index([collectionType])
   @@index([isActive])
+  @@index([appstleSellingPlanId])
 }
 
 // ─── BillingEvent ───────────────────────────────────────────
