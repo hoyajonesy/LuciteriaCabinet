@@ -6,3 +6,6 @@ node_modules/
 *.log
 .DS_Store
 /.vercel
+
+# Local test env (VM Postgres creds)
+.env.test

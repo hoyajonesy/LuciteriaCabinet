@@ -24,6 +24,7 @@ const ADMIN_NAV = [
   { label: "Demand", path: "/app/admin/demand", icon: "fa-fire" },
   { label: "Analytics", path: "/app/admin/analytics", icon: "fa-chart-simple" },
   { label: "Operations", path: "/app/admin/operations", icon: "fa-gear" },
+  { label: "Assignments", path: "/app/admin/subscription-assignments", icon: "fa-boxes-stacked" },
   { label: "Customers", path: "/app/admin/customers", icon: "fa-address-book" },
   { label: "Pricing", path: "/app/admin/pricing", icon: "fa-dollar-sign" },
 ];

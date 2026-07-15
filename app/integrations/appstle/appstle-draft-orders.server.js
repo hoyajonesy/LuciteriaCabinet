@@ -67,8 +67,17 @@ export function buildDraftOrderPayload({
     };
   }
 
+  const subscriptionId = shipment.subscriptionId || null;
+
   const tags = ["luciteria-subscription", "cabinet-assigned"];
   if (isFirstShipment) tags.push("first-shipment");
+  if (subscriptionId) tags.push(`sub-${subscriptionId}`);
+
+  // Choose a shipping method. First shipments get the "welcome" method; both
+  // are free at the point of sale because shipping is bundled into the plan.
+  const shippingTitle = isFirstShipment
+    ? "Luciteria Subscription — Welcome Shipment"
+    : "Luciteria Subscription — Monthly Shipment";
 
   const draftOrder = {
     line_items: [lineItem],
@@ -76,6 +85,18 @@ export function buildDraftOrderPayload({
     note: isFirstShipment
       ? `First subscription shipment — Cabinet Assignment (shipment ${shipment.id})`
       : `Cabinet Assignment — Shipment ${shipment.id}`,
+    // Persist the linkage back to the subscription + shipment for tracking/reconciliation.
+    note_attributes: [
+      { name: "cabinet_shipment_id", value: String(shipment.id) },
+      { name: "cabinet_subscription_id", value: String(subscriptionId || "") },
+      { name: "cabinet_shipment_type", value: isFirstShipment ? "first_shipment" : "renewal" },
+    ],
+    // Bundled shipping (customer already paid via the subscription plan).
+    shipping_line: {
+      title: shippingTitle,
+      price: "0.00",
+      custom: true,
+    },
     use_customer_default_address: true,
   };
 

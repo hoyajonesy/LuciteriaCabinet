@@ -118,9 +118,20 @@ export async function runAssignment({
     collectionType,
     subscriptionPrice: subscription?.priceUsd || tier.monthlyPrice,
     manualOverrideProductId,
+    tier,
   });
 
-  return { ...result, context: ctx, strategy, collectionType };
+  // Persist the audit trail so admins can see exactly why the engine chose (or
+  // could not choose) an item for this customer/cycle.
+  logger.info(MODULE, `Assignment for ${customer.email || customer.id} (${collectionType})`, {
+    success: result.success,
+    assigned: result.product?.sku || null,
+    reason: result.reason,
+    isFirstShipment,
+    audit: result.audit,
+  });
+
+  return { ...result, context: ctx, strategy, collectionType, tier };
 }
 
 /**
@@ -272,6 +283,7 @@ export async function refreshAssignmentPreview({ customer, subscription, count =
     strategy: STRATEGIES.WISHLIST_PRIORITY,
     collectionType,
     subscriptionPrice: subscription?.priceUsd || tier.monthlyPrice,
+    tier,
     count,
   });
 
@@ -322,6 +334,169 @@ export async function openException({ customer, reason, details }) {
       status: "pending",
     },
   });
+}
+
+/**
+ * Admin preview data: upcoming pre-computed assignments plus any shipments that
+ * are currently awaiting manual review. Powers the admin preview/override UI.
+ *
+ * @param {Object} [params]
+ * @param {number} [params.limit]
+ * @returns {Promise<{ previews: Array, pendingReview: Array }>}
+ */
+export async function getUpcomingAssignments({ limit = 100 } = {}) {
+  const [previews, pendingReview] = await Promise.all([
+    prisma.assignmentPreview.findMany({
+      orderBy: [{ estimatedDate: "asc" }, { sequencePosition: "asc" }],
+      take: limit,
+    }),
+    prisma.subscriptionShipment.findMany({
+      where: { status: { in: ["scheduled", "assigned"] } },
+      include: { items: { include: { product: true } } },
+      orderBy: { shipmentDate: "asc" },
+      take: limit,
+    }),
+  ]);
+
+  // Enrich pending shipments with customer + subscription context.
+  const enriched = await Promise.all(
+    pendingReview.map(async (s) => {
+      const [customer, subscription] = await Promise.all([
+        prisma.customer.findUnique({ where: { id: s.customerId } }),
+        prisma.subscription.findUnique({ where: { id: s.subscriptionId } }),
+      ]);
+      return { ...s, customer, subscription };
+    })
+  );
+
+  return { previews, pendingReview: enriched };
+}
+
+/**
+ * Apply a manual admin override: swap the product assigned to a shipment.
+ *
+ * Validates the target product through the assignment engine's override path
+ * (so discount/eligibility metadata is recomputed), swaps the shipment item,
+ * records an audit log, refreshes the preview sequence, and — unless a draft
+ * order already exists — creates the Shopify draft order for the new product.
+ *
+ * @param {Object} params
+ * @param {string} params.shipmentId
+ * @param {string} params.newProductId
+ * @param {string} [params.adminEmail]
+ * @param {string} [params.reason]
+ * @param {boolean} [params.createDraft]
+ * @returns {Promise<Object>} { shipment, product, previousProduct, overrideLog, assignment, draftOrder }
+ */
+export async function applyManualOverride({
+  shipmentId,
+  newProductId,
+  adminEmail = "admin",
+  reason = null,
+  createDraft = true,
+}) {
+  const shipment = await prisma.subscriptionShipment.findUnique({
+    where: { id: shipmentId },
+    include: { items: true },
+  });
+  if (!shipment) throw new Error(`Shipment ${shipmentId} not found`);
+
+  const [subscription, customer] = await Promise.all([
+    prisma.subscription.findUnique({ where: { id: shipment.subscriptionId } }),
+    prisma.customer.findUnique({ where: { id: shipment.customerId } }),
+  ]);
+  if (!subscription || !customer) {
+    throw new Error(`Missing subscription/customer for shipment ${shipmentId}`);
+  }
+
+  // Validate the target product through the engine override path.
+  const assignment = await runAssignment({
+    customer,
+    subscription,
+    manualOverrideProductId: newProductId,
+  });
+  if (!assignment.success || !assignment.product) {
+    throw new Error(`Override product invalid: ${assignment.reason}`);
+  }
+  const product = assignment.product;
+
+  // Capture previous product for the audit log.
+  const prevItem = shipment.items[0];
+  const previousProduct = prevItem
+    ? await prisma.product.findUnique({ where: { id: prevItem.productId } })
+    : null;
+
+  // Swap the shipment item.
+  await prisma.shipmentItem.deleteMany({ where: { shipmentId } });
+  await prisma.shipmentItem.create({ data: { shipmentId, productId: product.id } });
+
+  const retailPrice = product.retailPrice || product.priceUsd || 0;
+  const discountPercent = assignment.discount
+    ? Math.round(assignment.discount.discountPct * 10000) / 100
+    : 0;
+
+  await prisma.subscriptionShipment.update({
+    where: { id: shipmentId },
+    data: {
+      status: "assigned",
+      retailPrice,
+      discountPercent,
+      assignedBy: adminEmail,
+      notes: `${shipment.notes || ""}\n[override ${new Date().toISOString()}] ${adminEmail} → ${product.sku}${reason ? ` (${reason})` : ""}`.trim(),
+    },
+  });
+
+  // Record the override in the exception/audit queue (resolved).
+  const overrideLog = await prisma.assignmentException.create({
+    data: {
+      customerId: customer.id,
+      reason: "manual_override",
+      details: `Admin ${adminEmail} swapped ${previousProduct?.sku || "none"} → ${product.sku} on shipment ${shipmentId}. Reason: ${reason || "not specified"}`,
+      status: "resolved",
+      resolvedBy: adminEmail,
+      resolvedAt: new Date(),
+      resolution: `Overridden to ${product.sku} (${product.elementSymbol})`,
+    },
+  });
+
+  // Reflect the change in the preview sequence (position 1 = this shipment).
+  await prisma.assignmentPreview
+    .updateMany({
+      where: { subscriptionId: subscription.id, sequencePosition: 1 },
+      data: {
+        status: "shifted",
+        shiftedReason: "admin_override",
+        productId: product.id,
+        productSku: product.sku,
+        productTitle: product.title,
+        estimatedDiscount: assignment.discount?.discountPct ?? null,
+      },
+    })
+    .catch((e) => logger.warn(MODULE, `preview update on override failed: ${e.message}`));
+
+  // Create the Shopify draft order for the new product (unless one exists).
+  let draftOrder = null;
+  if (createDraft && !shipment.shopifyDraftOrderId) {
+    try {
+      draftOrder = await createSubscriptionDraftOrder({
+        customer,
+        product,
+        shipment,
+        assignedPrice: shipment.assignedPrice ?? subscription.priceUsd,
+        isFirstShipment: /first/i.test(shipment.notes || ""),
+      });
+    } catch (err) {
+      logger.error(MODULE, `Draft order creation failed after override for ${shipmentId}`, err);
+    }
+  }
+
+  await notifyAdmins(
+    "Manual assignment override applied",
+    `${adminEmail} overrode shipment ${shipmentId} for ${customer.firstName} ${customer.lastName}: ${previousProduct?.title || "unassigned"} → ${product.title}.`
+  );
+
+  const freshShipment = await prisma.subscriptionShipment.findUnique({ where: { id: shipmentId } });
+  return { shipment: freshShipment, product, previousProduct, overrideLog, assignment, draftOrder };
 }
 
 /**
