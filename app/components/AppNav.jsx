@@ -24,6 +24,7 @@ const ADMIN_NAV = [
   { label: "Demand", path: "/app/admin/demand", icon: "fa-fire" },
   { label: "Analytics", path: "/app/admin/analytics", icon: "fa-chart-simple" },
   { label: "Operations", path: "/app/admin/operations", icon: "fa-gear" },
+  { label: "Subscription Tiers", path: "/app/admin/subscription-tiers", icon: "fa-layer-group", badgeKey: "activeTiers" },
   { label: "Assignments", path: "/app/admin/subscription-assignments", icon: "fa-boxes-stacked" },
   { label: "Customers", path: "/app/admin/customers", icon: "fa-address-book" },
   { label: "Pricing", path: "/app/admin/pricing", icon: "fa-dollar-sign" },
@@ -34,6 +35,7 @@ export default function AppNav({
   customerName = "Collector",
   currentPath = null,
   unreadCount = 0,
+  badgeCounts = {},
 }) {
   const location = useLocation();
   const navItems = mode === "admin" ? ADMIN_NAV : CUSTOMER_NAV;
@@ -66,6 +68,11 @@ export default function AppNav({
               {item.badgeKey === "unread" && unreadCount > 0 && (
                 <span className="ml-auto text-xs bg-gray-300 text-gray-700 rounded-full px-2">
                   {unreadCount > 9 ? "9+" : unreadCount}
+                </span>
+              )}
+              {item.badgeKey && item.badgeKey !== "unread" && badgeCounts[item.badgeKey] > 0 && (
+                <span className="ml-auto text-xs bg-luc-bluegray text-luc-blue rounded-full px-2">
+                  {badgeCounts[item.badgeKey]}
                 </span>
               )}
             </>

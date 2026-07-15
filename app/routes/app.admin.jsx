@@ -20,7 +20,11 @@ export const loader = async ({ request }) => {
   if (!user) throw redirect("/onboarding/welcome");
   if (!user.isStaff) throw redirect("/app/cabinet");
 
-  return json({ user });
+  const activeTierCount = await prisma.subscriptionTier
+    .count({ where: { isActive: true } })
+    .catch(() => 0);
+
+  return json({ user, activeTierCount });
 };
 
 const ADMIN_TABS = [
@@ -31,7 +35,7 @@ const ADMIN_TABS = [
 ];
 
 export default function AdminLayout() {
-  const { user } = useLoaderData();
+  const { user, activeTierCount } = useLoaderData();
   const location = useLocation();
 
   const isTabActive = (tabPath) => {
@@ -43,7 +47,7 @@ export default function AdminLayout() {
 
   return (
     <div style={styles.layout}>
-      <AppNav mode="admin" customerName={`${user.firstName} ${user.lastName}`} />
+      <AppNav mode="admin" customerName={`${user.firstName} ${user.lastName}`} badgeCounts={{ activeTiers: activeTierCount }} />
       <main style={styles.main}>
         <div style={styles.header}>
           <h1 style={styles.h1}>Admin Dashboard</h1>
