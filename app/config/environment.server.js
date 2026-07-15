@@ -39,6 +39,25 @@ export const SHOPIFY_CONFIG = {
   scopes: (process.env.SCOPES || "").split(",").filter(Boolean),
 };
 
+// ─── APPSTLE (SUBSCRIPTION BILLING) ──────────────────────────
+
+export const APPSTLE_CONFIG = {
+  // HMAC secret used to validate inbound Appstle webhook signatures.
+  webhookSecret: process.env.APPSTLE_WEBHOOK_SECRET || "",
+  // API key for any outbound Appstle Admin API calls (optional).
+  apiKey: process.env.APPSTLE_API_KEY || "",
+  // Base URL for outbound Appstle API (defaults to the public Appstle API).
+  apiBaseUrl: process.env.APPSTLE_API_BASE_URL || "https://subscription-admin.appstle.com/api/external/v2",
+  // Header the signature is delivered in (Appstle uses X-Appstle-Hmac-Sha256).
+  signatureHeader: process.env.APPSTLE_SIGNATURE_HEADER || "x-appstle-hmac-sha256",
+  // Signature digest encoding — Appstle sends base64 by default.
+  signatureEncoding: process.env.APPSTLE_SIGNATURE_ENCODING || "base64", // "base64" | "hex"
+};
+
+// Public base URL of the Cabinet app (used when registering webhook callbacks).
+export const CABINET_BASE_URL =
+  process.env.CABINET_BASE_URL || process.env.APP_URL || "https://cabinet.luciteria.com";
+
 // ─── EMAIL / NOTIFICATIONS ───────────────────────────────────
 
 export const EMAIL_CONFIG = {
@@ -108,6 +127,9 @@ export function validateEnvironment() {
     if (!SHOPIFY_CONFIG.shopDomain) errors.push("SHOPIFY_SHOP_DOMAIN is required in production mode");
     if (!SHOPIFY_CONFIG.accessToken) errors.push("SHOPIFY_ACCESS_TOKEN is required in production mode");
     if (!SHOPIFY_CONFIG.webhookSecret) errors.push("SHOPIFY_WEBHOOK_SECRET is required in production mode");
+
+    // Appstle webhook secret is required to validate inbound subscription webhooks
+    if (!APPSTLE_CONFIG.webhookSecret) errors.push("APPSTLE_WEBHOOK_SECRET is required in production mode");
 
     // Database must be PostgreSQL in production
     if (DATABASE_URL.includes("file:")) {

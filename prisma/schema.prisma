@@ -23,11 +23,11 @@ datasource db {
 model User {
   id                  String   @id @default(uuid())
   email               String   @unique
-  passwordHash        String   // TODO PRODUCTION: Remove — Shopify OAuth replaces this
+  passwordHash        String // TODO PRODUCTION: Remove — Shopify OAuth replaces this
   firstName           String
   lastName            String
   isSubscriber        Boolean  @default(false)
-  subscriptionFormat  String?  // "10mm", "25.4mm", "50mm", "lucite", "ampoules"
+  subscriptionFormat  String? // "10mm", "25.4mm", "50mm", "lucite", "ampoules"
   trackedFormats      String   @default("[]") // JSON array of formats tracked (for collectors)
   onboardingCompleted Boolean  @default(false)
   onboardingStep      Int      @default(1) // Current onboarding step (1-5)
@@ -35,38 +35,42 @@ model User {
   userType            String   @default("collector") // "subscriber" or "collector"
   isStaff             Boolean  @default(false) // Admin access flag
   tooltipsDismissed   Boolean  @default(false) // First-time user tooltips
-  primaryMotivation   String?  // Phase 2: INVENTORY, SOCIAL, ACQUISITION, INVESTMENT, DISCOVERY
+  primaryMotivation   String? // Phase 2: INVENTORY, SOCIAL, ACQUISITION, INVESTMENT, DISCOVERY
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
   // Password reset fields
-  resetToken          String?  @unique
-  resetTokenExpiry    DateTime?
+  resetToken       String?   @unique
+  resetTokenExpiry DateTime?
 
   // ─── Admin MVP: Account status & tier ───
-  status              String   @default("active") // "active", "frozen"
-  freezeReason        String?  // Reason for account freeze
-  tier                String   @default("Free") // "Free", "Collector", "Curator"
+  status       String  @default("active") // "active", "frozen"
+  freezeReason String? // Reason for account freeze
+  tier         String  @default("Free") // "Free", "Collector", "Curator"
 
   // ─── Membership / Subscription fields ───
-  membershipTierId    String?
-  membershipTier      MembershipTier? @relation(fields: [membershipTierId], references: [id])
-  storeCreditBalance  Float    @default(0)
-  subscriptionStatus  String   @default("NONE") // NONE, ACTIVE, PAUSED, CANCELLED
+  membershipTierId   String?
+  membershipTier     MembershipTier? @relation(fields: [membershipTierId], references: [id])
+  storeCreditBalance Float           @default(0)
+  subscriptionStatus String          @default("NONE") // NONE, ACTIVE, PAUSED, CANCELLED
+
+  // ─── Appstle / Shopify linkage (for quick webhook lookup) ───
+  appstleCustomerId String? @unique // Appstle's customer identifier
+  shopifyCustomerId String? @unique // Shopify numeric customer ID
 
   // Relationships
-  ownedElements       UserElement[]
-  wishlistElements    UserWishlistElement[]
-  userSubscriptions   UserSubscription[]
-  creditTransactions  CreditTransaction[]
-  ownedSkus           UserOwnedSku[]
-  completionGoals     CompletionGoal[]
+  ownedElements      UserElement[]
+  wishlistElements   UserWishlistElement[]
+  userSubscriptions  UserSubscription[]
+  creditTransactions CreditTransaction[]
+  ownedSkus          UserOwnedSku[]
+  completionGoals    CompletionGoal[]
 
   // ─── Collection-first relationships (Phase 1 refactor) ───
-  collectionItems     CollectionItem[]
-  milestones          Milestone[]
-  collectionGoalsV2   CollectionGoalV2[]
-  activityLogs        ActivityLog[]
+  collectionItems   CollectionItem[]
+  milestones        Milestone[]
+  collectionGoalsV2 CollectionGoalV2[]
+  activityLogs      ActivityLog[]
 
   // ─── Phase 2 engagement relationships ───
   elementNotes           ElementNote[]
@@ -75,14 +79,15 @@ model User {
   notificationPreference NotificationPreference?
 
   // ─── Admin MVP relationships ───
-  freezeLogs             FreezeLog[]
-  userMilestoneAwards    UserMilestoneAward[]
+  freezeLogs          FreezeLog[]
+  userMilestoneAwards UserMilestoneAward[]
 
   @@index([email])
   @@index([wishlistToken])
   @@index([membershipTierId])
   @@index([status])
   @@index([resetToken])
+  @@index([shopifyCustomerId])
 }
 
 // ─── User's Owned Elements (onboarding + manual tracking) ────
@@ -92,7 +97,7 @@ model UserElement {
   elementSymbol String
   elementName   String
   atomicNumber  Int
-  format        String?  // Which format they own this in
+  format        String? // Which format they own this in
   addedAt       DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -119,29 +124,29 @@ model UserWishlistElement {
 
 // ─── Customer ─────────────────────────────────────────────────
 model Customer {
-  id              String   @id @default(uuid())
-  shopifyId       String?  @unique  // Shopify Customer GID
-  shopifyCustomerId String? @unique // Numeric Shopify customer ID
-  email           String   @unique
-  firstName       String
-  lastName        String
-  displayName     String   // e.g. "The Completionist"
-  avatarUrl       String?
-  collectionType  String   @default("lucite") // "10mm", "25.4mm", "50mm", "lucite", "ampoules"
-  onboardedAt     DateTime? // When collection type was chosen
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                String    @id @default(uuid())
+  shopifyId         String?   @unique // Shopify Customer GID
+  shopifyCustomerId String?   @unique // Numeric Shopify customer ID
+  email             String    @unique
+  firstName         String
+  lastName          String
+  displayName       String // e.g. "The Completionist"
+  avatarUrl         String?
+  collectionType    String    @default("lucite") // "10mm", "25.4mm", "50mm", "lucite", "ampoules"
+  onboardedAt       DateTime? // When collection type was chosen
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   // Relationships
-  collectionRecords CollectionRecord[]
-  wishlistItems     WishlistItem[]
-  subscription      Subscription?
-  preferences       CustomerPreference?
-  shipments         SubscriptionShipment[]
-  exceptions        AssignmentException[]
-  adminNotes        AdminNote[]
+  collectionRecords     CollectionRecord[]
+  wishlistItems         WishlistItem[]
+  subscription          Subscription?
+  preferences           CustomerPreference?
+  shipments             SubscriptionShipment[]
+  exceptions            AssignmentException[]
+  adminNotes            AdminNote[]
   collectionTypeChanges CollectionTypeChange[]
-  notifications     NotificationLog[]
+  notifications         NotificationLog[]
 
   // Indexes for common queries
   @@index([collectionType])
@@ -151,31 +156,31 @@ model Customer {
 
 // ─── Product / Collectible ────────────────────────────────────
 model Product {
-  id               String   @id @default(uuid())
-  shopifyProductId  String?  @unique // Shopify Product GID
-  shopifyVariantId  String?  @unique // Shopify Variant GID
-  shopifyInventoryItemId String? // Shopify Inventory Item ID (for stock tracking)
-  handle           String?
-  title            String
-  description      String   @default("") // HTML body from Shopify
-  sku              String   @unique
-  elementSymbol    String   // e.g. "Sr", "Na"
-  elementName      String   // e.g. "Strontium", "Sodium"
-  atomicNumber     Int
-  category         String   // "Lucite Cube", "Metal Bar", "Ampoule", etc.
-  format           String   // "50mm", "31mm", "10mm", "ampoule", etc.
-  collectionTypes  String   @default("[]") // JSON array of collection types
-  status           String   @default("Active") // "Active", "Archived", "Draft"
-  inventoryQty     Int      @default(0)
-  priceUsd         Float    @default(0)
-  retailPrice      Float    @default(0) // Full retail price
-  subscriptionCost Float?   // Cost basis for margin/discount calculation
-  imageUrl         String?
-  rarityTier       String   @default("common")
-  availableForSubscription Boolean @default(false)
-  tags             String   @default("[]") // JSON array of Shopify tags
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id                       String   @id @default(uuid())
+  shopifyProductId         String?  @unique // Shopify Product GID
+  shopifyVariantId         String?  @unique // Shopify Variant GID
+  shopifyInventoryItemId   String? // Shopify Inventory Item ID (for stock tracking)
+  handle                   String?
+  title                    String
+  description              String   @default("") // HTML body from Shopify
+  sku                      String   @unique
+  elementSymbol            String // e.g. "Sr", "Na"
+  elementName              String // e.g. "Strontium", "Sodium"
+  atomicNumber             Int
+  category                 String // "Lucite Cube", "Metal Bar", "Ampoule", etc.
+  format                   String // "50mm", "31mm", "10mm", "ampoule", etc.
+  collectionTypes          String   @default("[]") // JSON array of collection types
+  status                   String   @default("Active") // "Active", "Archived", "Draft"
+  inventoryQty             Int      @default(0)
+  priceUsd                 Float    @default(0)
+  retailPrice              Float    @default(0) // Full retail price
+  subscriptionCost         Float? // Cost basis for margin/discount calculation
+  imageUrl                 String?
+  rarityTier               String   @default("common")
+  availableForSubscription Boolean  @default(false)
+  tags                     String   @default("[]") // JSON array of Shopify tags
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 
   // Relationships
   collectionRecords CollectionRecord[]
@@ -197,9 +202,9 @@ model CollectionRecord {
   id             String   @id @default(uuid())
   customerId     String
   productId      String
-  acquiredVia    String   // "purchase", "subscription", "gift", "trade"
+  acquiredVia    String // "purchase", "subscription", "gift", "trade"
   acquiredDate   DateTime @default(now())
-  collectionType String?  // Which collection this belongs to
+  collectionType String? // Which collection this belongs to
   notes          String?
 
   customer Customer @relation(fields: [customerId], references: [id])
@@ -211,12 +216,12 @@ model CollectionRecord {
 
 // ─── Wishlist ─────────────────────────────────────────────────
 model WishlistItem {
-  id           String   @id @default(uuid())
-  customerId   String
-  productId    String
-  priority     Int      @default(0)
-  notifyOnRestock Boolean @default(false)
-  addedAt      DateTime @default(now())
+  id              String   @id @default(uuid())
+  customerId      String
+  productId       String
+  priority        Int      @default(0)
+  notifyOnRestock Boolean  @default(false)
+  addedAt         DateTime @default(now())
 
   customer Customer @relation(fields: [customerId], references: [id])
   product  Product  @relation(fields: [productId], references: [id])
@@ -227,58 +232,67 @@ model WishlistItem {
 
 // ─── Subscription ─────────────────────────────────────────────
 model Subscription {
-  id                String   @id @default(uuid())
-  customerId        String   @unique
-  shopifyContractId String?  @unique // Shopify Subscription Contract GID
+  id                String    @id @default(uuid())
+  customerId        String    @unique
+  shopifyContractId String?   @unique // Shopify Subscription Contract GID
   planName          String
   planTier          String
-  status            String   // "active", "paused", "cancelled", "past_due"
-  billingCadence    String   // "monthly", "quarterly", "annual"
+  status            String // "active", "paused", "cancelled", "past_due"
+  billingCadence    String // "monthly", "quarterly", "annual"
   priceUsd          Float
-  collectionType    String?  // Subscription collection type
-  originalPrice     Float?   // Price at signup (for grandfathering)
-  currentPrice      Float?   // Current plan price
+  collectionType    String? // Subscription collection type
+  originalPrice     Float? // Price at signup (for grandfathering)
+  currentPrice      Float? // Current plan price
   priceLockedAt     DateTime? // When price was locked
   priceExpiresAt    DateTime? // When grandfather period ends
-  grandfathered     Boolean  @default(false)
-  pausedDays        Int      @default(0) // Total days paused
+  grandfathered     Boolean   @default(false)
+  pausedDays        Int       @default(0) // Total days paused
   nextShipmentDate  DateTime
   nextBillingDate   DateTime
   startDate         DateTime
   pausedAt          DateTime?
   cancelledAt       DateTime?
-  itemsPerShipment  Int      @default(1)
+  itemsPerShipment  Int       @default(1)
 
-  customer  Customer @relation(fields: [customerId], references: [id])
+  // ─── Appstle integration fields ───
+  appstleContractId      String?   @unique // Appstle's internal subscription contract ID
+  appstleSellingPlanId   String? // Appstle / Shopify selling plan GID
+  appstleSellingPlanName String? // Human-readable, e.g. "Lucite Cubes — Monthly"
+  lastBillingDate        DateTime? // When the last successful charge occurred
+  lastBillingAmount      Float? // Amount of the last successful charge
+  failedBillingAttempts  Int       @default(0) // Count of consecutive billing failures
+
+  customer  Customer               @relation(fields: [customerId], references: [id])
   shipments SubscriptionShipment[]
 
   // Indexes
   @@index([status])
   @@index([nextShipmentDate])
   @@index([collectionType])
+  @@index([appstleContractId])
 }
 
 // ─── Subscription Shipment ────────────────────────────────────
 model SubscriptionShipment {
-  id              String   @id @default(uuid())
-  subscriptionId  String
-  customerId      String
-  shopifyOrderId  String?  // Shopify Order GID
+  id                  String   @id @default(uuid())
+  subscriptionId      String
+  customerId          String
+  shopifyOrderId      String? // Shopify Order GID
   shopifyDraftOrderId String? // Shopify Draft Order GID
-  shipmentDate    DateTime
-  status          String   // "scheduled", "assigned", "ordered", "paid", "shipped", "delivered", "skipped"
-  trackingNumber  String?
-  trackingUrl     String?
-  trackingCompany String?  // e.g. "FedEx", "UPS"
-  assignedBy      String   @default("auto") // "auto" or admin email
-  retailPrice     Float?
-  assignedPrice   Float?   // Subscription price customer paid
-  discountPercent Float?
-  notes           String?
-  createdAt       DateTime @default(now())
+  shipmentDate        DateTime
+  status              String // "scheduled", "assigned", "ordered", "paid", "shipped", "delivered", "skipped"
+  trackingNumber      String?
+  trackingUrl         String?
+  trackingCompany     String? // e.g. "FedEx", "UPS"
+  assignedBy          String   @default("auto") // "auto" or admin email
+  retailPrice         Float?
+  assignedPrice       Float? // Subscription price customer paid
+  discountPercent     Float?
+  notes               String?
+  createdAt           DateTime @default(now())
 
-  subscription Subscription @relation(fields: [subscriptionId], references: [id])
-  customer     Customer     @relation(fields: [customerId], references: [id])
+  subscription Subscription   @relation(fields: [subscriptionId], references: [id])
+  customer     Customer       @relation(fields: [customerId], references: [id])
   items        ShipmentItem[]
 
   // Indexes
@@ -289,9 +303,9 @@ model SubscriptionShipment {
 
 // ─── Shipment Item ────────────────────────────────────────────
 model ShipmentItem {
-  id          String @id @default(uuid())
-  shipmentId  String
-  productId   String
+  id         String @id @default(uuid())
+  shipmentId String
+  productId  String
 
   shipment SubscriptionShipment @relation(fields: [shipmentId], references: [id])
   product  Product              @relation(fields: [productId], references: [id])
@@ -319,15 +333,15 @@ model CustomerPreference {
 
 // ─── Assignment Exception (manual review queue) ───────────────
 model AssignmentException {
-  id           String   @id @default(uuid())
-  customerId   String
-  reason       String   // "no_eligible_items", "duplicate_risk", "inventory_conflict", "discount_exceeded", "high_discount"
-  details      String
-  status       String   @default("pending") // "pending", "resolved", "skipped"
-  resolvedBy   String?
-  resolvedAt   DateTime?
-  resolution   String?
-  createdAt    DateTime @default(now())
+  id         String    @id @default(uuid())
+  customerId String
+  reason     String // "no_eligible_items", "duplicate_risk", "inventory_conflict", "discount_exceeded", "high_discount"
+  details    String
+  status     String    @default("pending") // "pending", "resolved", "skipped"
+  resolvedBy String?
+  resolvedAt DateTime?
+  resolution String?
+  createdAt  DateTime  @default(now())
 
   customer Customer @relation(fields: [customerId], references: [id])
 
@@ -337,13 +351,13 @@ model AssignmentException {
 
 // ─── Inventory Log ────────────────────────────────────────────
 model InventoryLog {
-  id          String   @id @default(uuid())
-  productId   String
-  prevQty     Int
-  newQty      Int
-  reason      String   // "shopify_sync", "manual_adjust", "shipment", "restock"
-  source      String   @default("manual") // "shopify_webhook", "manual", "assignment_engine"
-  createdAt   DateTime @default(now())
+  id        String   @id @default(uuid())
+  productId String
+  prevQty   Int
+  newQty    Int
+  reason    String // "shopify_sync", "manual_adjust", "shipment", "restock"
+  source    String   @default("manual") // "shopify_webhook", "manual", "assignment_engine"
+  createdAt DateTime @default(now())
 
   product Product @relation(fields: [productId], references: [id])
 
@@ -370,7 +384,7 @@ model CollectionTypeChange {
   customerId   String
   previousType String
   newType      String
-  reason       String?  // "initial_selection", "admin_override", "customer_request"
+  reason       String? // "initial_selection", "admin_override", "customer_request"
   changedBy    String   @default("customer")
   createdAt    DateTime @default(now())
 
@@ -381,13 +395,13 @@ model CollectionTypeChange {
 
 // ─── Pricing History ──────────────────────────────────────────
 model PricingHistory {
-  id              String   @id @default(uuid())
-  productId       String
-  priceUsd        Float
-  retailPrice     Float
+  id               String   @id @default(uuid())
+  productId        String
+  priceUsd         Float
+  retailPrice      Float
   subscriptionCost Float?
-  effectiveDate   DateTime @default(now())
-  notes           String?
+  effectiveDate    DateTime @default(now())
+  notes            String?
 
   product Product @relation(fields: [productId], references: [id])
 
@@ -397,16 +411,16 @@ model PricingHistory {
 
 // ─── Notification Log ─────────────────────────────────────────
 model NotificationLog {
-  id          String   @id @default(uuid())
-  customerId  String?
-  channel     String   // "email", "webhook", "sms"
-  template    String?
-  event       String?
-  subject     String?
-  recipient   String
-  status      String   @default("sent") // "sent", "delivered", "failed", "bounced"
-  sentAt      DateTime @default(now())
-  metadata    String?  // JSON blob for extra data
+  id         String   @id @default(uuid())
+  customerId String?
+  channel    String // "email", "webhook", "sms"
+  template   String?
+  event      String?
+  subject    String?
+  recipient  String
+  status     String   @default("sent") // "sent", "delivered", "failed", "bounced"
+  sentAt     DateTime @default(now())
+  metadata   String? // JSON blob for extra data
 
   customer Customer? @relation(fields: [customerId], references: [id])
 
@@ -418,14 +432,14 @@ model NotificationLog {
 // ─── Webhook Event Log (Phase 2.5) ───────────────────────────
 // Tracks all inbound Shopify webhooks for debugging and replay
 model WebhookEventLog {
-  id          String   @id @default(uuid())
-  topic       String   // e.g. "products/update", "orders/create"
-  shopifyId   String?  // The Shopify resource ID from the payload
-  payload     String   // Full JSON payload (stored as text for SQLite compat)
-  status      String   @default("received") // "received", "processed", "failed", "retrying"
+  id          String    @id @default(uuid())
+  topic       String // e.g. "products/update", "orders/create"
+  shopifyId   String? // The Shopify resource ID from the payload
+  payload     String // Full JSON payload (stored as text for SQLite compat)
+  status      String    @default("received") // "received", "processed", "failed", "retrying"
   errorMsg    String?
   processedAt DateTime?
-  receivedAt  DateTime @default(now())
+  receivedAt  DateTime  @default(now())
 
   @@index([topic])
   @@index([status])
@@ -435,13 +449,13 @@ model WebhookEventLog {
 // ─── Shopify Sync Status (Phase 2.5) ─────────────────────────
 // Tracks the last sync time and status for each data type
 model ShopifySyncStatus {
-  id            String   @id @default(uuid())
-  resourceType  String   @unique // "products", "customers", "inventory", "orders"
-  lastSyncAt    DateTime?
-  lastSyncStatus String  @default("never") // "never", "success", "partial", "failed"
-  itemsSynced   Int      @default(0)
-  errorMsg      String?
-  updatedAt     DateTime @updatedAt
+  id             String    @id @default(uuid())
+  resourceType   String    @unique // "products", "customers", "inventory", "orders"
+  lastSyncAt     DateTime?
+  lastSyncStatus String    @default("never") // "never", "success", "partial", "failed"
+  itemsSynced    Int       @default(0)
+  errorMsg       String?
+  updatedAt      DateTime  @updatedAt
 
   @@index([resourceType])
 }
@@ -452,46 +466,46 @@ model ShopifySyncStatus {
 
 // ─── Membership Tiers (max 3 enforced in app logic) ─────────
 model MembershipTier {
-  id                String   @id @default(uuid())
-  name              String   @unique  // "Bronze", "Silver", "Gold"
-  displayName       String
-  monthlyPrice      Float
-  storeCredit       Float    // Monthly credit amount
-  sortOrder         Int      // 1, 2, 3
-  isActive          Boolean  @default(true)
-  earlyAccessDays   Int      @default(0) // Days before public launch
+  id              String  @id @default(uuid())
+  name            String  @unique // "Bronze", "Silver", "Gold"
+  displayName     String
+  monthlyPrice    Float
+  storeCredit     Float // Monthly credit amount
+  sortOrder       Int // 1, 2, 3
+  isActive        Boolean @default(true)
+  earlyAccessDays Int     @default(0) // Days before public launch
 
   users             User[]
   packs             CollectorPack[]
   userSubscriptions UserSubscription[]
 
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([sortOrder])
 }
 
 // ─── User Subscription (membership billing management) ──────
 model UserSubscription {
-  id                String   @id @default(uuid())
-  userId            String
-  user              User     @relation(fields: [userId], references: [id])
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
-  tierId            String
-  tier              MembershipTier @relation(fields: [tierId], references: [id])
+  tierId String
+  tier   MembershipTier @relation(fields: [tierId], references: [id])
 
-  status            String   // ACTIVE, PAUSED, CANCELLED
-  billingCycle      String   // MONTHLY, QUARTERLY
-  nextBillingDate   DateTime
+  status          String // ACTIVE, PAUSED, CANCELLED
+  billingCycle    String // MONTHLY, QUARTERLY
+  nextBillingDate DateTime
 
-  canSkipNext       Boolean  @default(true)
-  skippedMonths     String   @default("[]") // JSON array of skipped dates
+  canSkipNext   Boolean @default(true)
+  skippedMonths String  @default("[]") // JSON array of skipped dates
 
-  pausedAt          DateTime?
-  cancelledAt       DateTime?
+  pausedAt    DateTime?
+  cancelledAt DateTime?
 
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
   @@index([status])
@@ -499,18 +513,18 @@ model UserSubscription {
 
 // ─── Store Credit Tracking ──────────────────────────────────
 model CreditTransaction {
-  id            String   @id @default(uuid())
-  userId        String
-  user          User     @relation(fields: [userId], references: [id])
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
-  amount        Float
-  type          String   // MONTHLY_GRANT, PURCHASE, REFUND, SPENT
-  description   String
+  amount      Float
+  type        String // MONTHLY_GRANT, PURCHASE, REFUND, SPENT
+  description String
 
   balanceBefore Float
   balanceAfter  Float
 
-  createdAt     DateTime @default(now())
+  createdAt DateTime @default(now())
 
   @@index([userId])
   @@index([type])
@@ -519,69 +533,69 @@ model CreditTransaction {
 
 // ─── Product/SKU Subscription Eligibility ───────────────────
 model SubscriptionSku {
-  id                String   @id @default(uuid())
-  sku               String   @unique
-  productId         String   // Link to Shopify product
+  id        String @id @default(uuid())
+  sku       String @unique
+  productId String // Link to Shopify product
 
-  isEligible        Boolean  @default(false)
-  isSubscriberOnly  Boolean  @default(false)
-  isEarlyAccess     Boolean  @default(false)
+  isEligible       Boolean @default(false)
+  isSubscriberOnly Boolean @default(false)
+  isEarlyAccess    Boolean @default(false)
 
-  minTierId         String?  // Minimum tier required
+  minTierId String? // Minimum tier required
 
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([isEligible])
 }
 
 // ─── Pre-built Collector Packs (Phase 1) ────────────────────
 model CollectorPack {
-  id              String   @id @default(uuid())
-  name            String
-  description     String
+  id          String @id @default(uuid())
+  name        String
+  description String
 
-  itemCount       Int      // 3 or 5 fixed
-  skuList         String   // JSON array of SKU strings
+  itemCount Int // 3 or 5 fixed
+  skuList   String // JSON array of SKU strings
 
-  tierId          String?  // Optional tier restriction
-  tier            MembershipTier? @relation(fields: [tierId], references: [id])
+  tierId String? // Optional tier restriction
+  tier   MembershipTier? @relation(fields: [tierId], references: [id])
 
-  price           Float?   // Optional override price
-  creditCost      Float?   // Cost in store credits
+  price      Float? // Optional override price
+  creditCost Float? // Cost in store credits
 
-  isActive        Boolean  @default(true)
-  stockLimit      Int?     // Optional limit
+  isActive   Boolean @default(true)
+  stockLimit Int? // Optional limit
 
-  imageUrl        String?
+  imageUrl String?
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([isActive])
 }
 
 // ─── Pack Orders (admin approval queue) ─────────────────────
 model PackOrder {
-  id              String   @id @default(uuid())
-  userId          String
-  packId          String
-  packName        String
+  id       String @id @default(uuid())
+  userId   String
+  packId   String
+  packName String
 
-  status          String   @default("PENDING") // PENDING, ADMIN_APPROVED, FULFILLED, REJECTED
-  paymentMethod   String   // CREDIT, DIRECT
-  creditAmount    Float    @default(0)
-  cashAmount      Float    @default(0)
+  status        String @default("PENDING") // PENDING, ADMIN_APPROVED, FULFILLED, REJECTED
+  paymentMethod String // CREDIT, DIRECT
+  creditAmount  Float  @default(0)
+  cashAmount    Float  @default(0)
 
-  skuList         String   // JSON array — snapshot of pack SKUs at order time
-  adminNotes      String?
-  approvedBy      String?
-  approvedAt      DateTime?
-  fulfilledAt     DateTime?
-  rejectedAt      DateTime?
+  skuList     String // JSON array — snapshot of pack SKUs at order time
+  adminNotes  String?
+  approvedBy  String?
+  approvedAt  DateTime?
+  fulfilledAt DateTime?
+  rejectedAt  DateTime?
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
   @@index([status])
@@ -589,16 +603,16 @@ model PackOrder {
 
 // ─── PHASE 2: Ownership tracking (built but dormant) ────────
 model UserOwnedSku {
-  id              String   @id @default(uuid())
-  userId          String
-  user            User     @relation(fields: [userId], references: [id])
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
-  sku             String
-  elementSymbol   String?  // Mapped from SKU
-  format          String?  // 10mm, 25.4mm, etc.
+  sku           String
+  elementSymbol String? // Mapped from SKU
+  format        String? // 10mm, 25.4mm, etc.
 
-  acquiredDate    DateTime @default(now())
-  source          String   // PURCHASE, SUBSCRIPTION, GIFT
+  acquiredDate DateTime @default(now())
+  source       String // PURCHASE, SUBSCRIPTION, GIFT
 
   @@unique([userId, sku])
   @@index([userId])
@@ -606,42 +620,42 @@ model UserOwnedSku {
 
 // ─── PHASE 2: Completion goals (built but dormant) ──────────
 model CompletionGoal {
-  id              String   @id @default(uuid())
-  userId          String
-  user            User     @relation(fields: [userId], references: [id])
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
-  goalType        String   // FULL_SET, FORMAT_SET, GROUP
-  targetFormat    String?  // 10mm, 25.4mm, etc.
-  targetGroup     String?  // noble_gases, etc.
+  goalType     String // FULL_SET, FORMAT_SET, GROUP
+  targetFormat String? // 10mm, 25.4mm, etc.
+  targetGroup  String? // noble_gases, etc.
 
-  targetCount     Int
-  currentCount    Int      @default(0)
+  targetCount  Int
+  currentCount Int @default(0)
 
-  isActive        Boolean  @default(true)
+  isActive Boolean @default(true)
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
 }
 
 // ─── PHASE 3: Curation requests (scaffold only) ─────────────
 model CurationRequest {
-  id              String   @id @default(uuid())
-  userId          String
+  id     String @id @default(uuid())
+  userId String
 
-  requestType     String   // MISSING_ELEMENTS_QUARTERLY
-  elementCount    Int      // N missing elements
-  cadence         String   // QUARTERLY, etc.
+  requestType  String // MISSING_ELEMENTS_QUARTERLY
+  elementCount Int // N missing elements
+  cadence      String // QUARTERLY, etc.
 
-  status          String   @default("PENDING") // PENDING, APPROVED, FULFILLED, REJECTED
+  status String @default("PENDING") // PENDING, APPROVED, FULFILLED, REJECTED
 
-  adminNotes      String?
-  approvedBy      String?
-  approvedAt      DateTime?
+  adminNotes String?
+  approvedBy String?
+  approvedAt DateTime?
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
   @@index([status])
@@ -649,12 +663,12 @@ model CurationRequest {
 
 // ─── Feature Flags (admin control) ──────────────────────────
 model FeatureFlag {
-  id          String   @id @default(uuid())
-  flagName    String   @unique
-  isEnabled   Boolean  @default(false)
+  id          String  @id @default(uuid())
+  flagName    String  @unique
+  isEnabled   Boolean @default(false)
   description String
 
-  updatedAt   DateTime @updatedAt
+  updatedAt DateTime @updatedAt
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -671,7 +685,7 @@ model AdminUser {
   updatedAt    DateTime @updatedAt
 
   // Password reset
-  resetToken      String?   @unique
+  resetToken       String?   @unique
   resetTokenExpiry DateTime?
 
   @@index([email])
@@ -701,12 +715,12 @@ model CollectionSet {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  elements    CollectionSetElement[]
+  elements CollectionSetElement[]
 }
 
 // ─── CollectionSetElement (elements in a set) ────────────────
 model CollectionSetElement {
-  id            String   @id @default(uuid())
+  id            String @id @default(uuid())
   setId         String
   elementSymbol String
   atomicNumber  Int
@@ -726,16 +740,16 @@ model MilestoneDefinition {
   icon        String   @default("🏆")
   createdAt   DateTime @default(now())
 
-  awards      UserMilestoneAward[]
+  awards UserMilestoneAward[]
 }
 
 // ─── UserMilestoneAward (awarded milestones log) ─────────────
 model UserMilestoneAward {
-  id            String   @id @default(uuid())
-  userId        String
-  milestoneId   String
-  awardedBy     String   // admin email who awarded
-  awardedAt     DateTime @default(now())
+  id          String   @id @default(uuid())
+  userId      String
+  milestoneId String
+  awardedBy   String // admin email who awarded
+  awardedAt   DateTime @default(now())
 
   user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   milestone MilestoneDefinition @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
@@ -750,7 +764,7 @@ model FreezeLog {
   id         String    @id @default(uuid())
   userId     String
   reason     String
-  frozenBy   String    // admin email
+  frozenBy   String // admin email
   frozenAt   DateTime  @default(now())
   unfrozenAt DateTime?
   unfrozenBy String?
@@ -762,13 +776,13 @@ model FreezeLog {
 
 // ─── BulkNotificationLog (sent bulk notification history) ────
 model BulkNotificationLog {
-  id            String   @id @default(uuid())
-  subject       String
-  body          String
-  segment       String   @default("all") // "all", or JSON filter criteria
-  recipientCount Int     @default(0)
-  sentBy        String   // admin email
-  sentAt        DateTime @default(now())
+  id             String   @id @default(uuid())
+  subject        String
+  body           String
+  segment        String   @default("all") // "all", or JSON filter criteria
+  recipientCount Int      @default(0)
+  sentBy         String // admin email
+  sentAt         DateTime @default(now())
 
   @@index([sentAt])
 }
@@ -781,31 +795,31 @@ model BulkNotificationLog {
 // Replaces separate UserElement + UserWishlistElement with a single
 // model that tracks state: OWNED, WANTED, WATCHLIST, MISSING
 model CollectionItem {
-  id            String   @id @default(uuid())
-  userId        String
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  elementSymbol String   // e.g. "Fe"
-  elementName   String   // e.g. "Iron"
+  elementSymbol String // e.g. "Fe"
+  elementName   String // e.g. "Iron"
   atomicNumber  Int
 
-  state         String   @default("MISSING") // OWNED, WANTED, WATCHLIST, MISSING
-  format        String?  // "10mm", "25.4mm", "50mm", "lucite", "ampoules"
-  acquiredDate  DateTime?
-  acquiredVia   String?  // "purchase", "subscription", "gift", "trade", "manual"
-  notes         String?
+  state        String    @default("MISSING") // OWNED, WANTED, WATCHLIST, MISSING
+  format       String? // "10mm", "25.4mm", "50mm", "lucite", "ampoules"
+  acquiredDate DateTime?
+  acquiredVia  String? // "purchase", "subscription", "gift", "trade", "manual"
+  notes        String?
 
   // ─── Phase 2: Wishlist context + priority ───
-  priority      Int      @default(0)   // Wishlist ordering: higher = more important (3=High,2=Med,1=Low)
-  contextLabel  String?  // CORE, EXPLORATION, ASPIRATIONAL, UPGRADE_TARGET
+  priority     Int     @default(0) // Wishlist ordering: higher = more important (3=High,2=Med,1=Low)
+  contextLabel String? // CORE, EXPLORATION, ASPIRATIONAL, UPGRADE_TARGET
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // 1:1 structured provenance note for owned items
-  elementNote   ElementNote?
+  elementNote ElementNote?
   // 1:many physical samples (a collector may own several of the same element)
-  samples       ElementSample[]
+  samples     ElementSample[]
 
   @@unique([userId, elementSymbol])
   @@index([userId])
@@ -817,26 +831,26 @@ model CollectionItem {
 // A collector can own more than one specimen of the same element
 // (e.g. a 10mm cube AND an ampoule). Each sample has its own provenance.
 model ElementSample {
-  id               String   @id @default(uuid())
-  userId           String
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   collectionItemId String
   collectionItem   CollectionItem @relation(fields: [collectionItemId], references: [id], onDelete: Cascade)
 
-  elementSymbol    String
+  elementSymbol String
 
-  acquisitionDate  DateTime?
-  source           String?
-  pricePaid        Float?
-  currency         String   @default("USD")
-  condition        String?   // "Mint", "Excellent", "Good", "Fair", "Damaged"
-  format           String?   // "10mm", "25.4mm", "50mm", "lucite", "ampoules"
-  storageLocation  String?
-  notes            String?
+  acquisitionDate DateTime?
+  source          String?
+  pricePaid       Float?
+  currency        String    @default("USD")
+  condition       String? // "Mint", "Excellent", "Good", "Fair", "Damaged"
+  format          String? // "10mm", "25.4mm", "50mm", "lucite", "ampoules"
+  storageLocation String?
+  notes           String?
 
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
   @@index([collectionItemId])
@@ -845,26 +859,26 @@ model ElementSample {
 
 // ─── ElementNote (Phase 2B — structured provenance for owned items) ──
 model ElementNote {
-  id               String   @id @default(uuid())
-  userId           String
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  collectionItemId String   @unique
+  collectionItemId String         @unique
   collectionItem   CollectionItem @relation(fields: [collectionItemId], references: [id], onDelete: Cascade)
 
-  elementSymbol    String
+  elementSymbol String
 
-  acquisitionDate  DateTime?
-  source           String?   // where acquired (vendor, eBay seller, gift, etc.)
-  pricePaid        Float?    // amount paid
-  currency         String   @default("USD")
-  condition        String?   // "Mint", "Excellent", "Good", "Fair", "Damaged"
-  storageLocation  String?
-  notes            String?   // free-text private notes
-  isPrivate        Boolean  @default(true)
+  acquisitionDate DateTime?
+  source          String? // where acquired (vendor, eBay seller, gift, etc.)
+  pricePaid       Float? // amount paid
+  currency        String    @default("USD")
+  condition       String? // "Mint", "Excellent", "Good", "Fair", "Damaged"
+  storageLocation String?
+  notes           String? // free-text private notes
+  isPrivate       Boolean   @default(true)
 
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
   @@index([collectionItemId])
@@ -872,20 +886,20 @@ model ElementNote {
 
 // ─── Notification (Phase 2D — in-app inbox item) ──────────────────
 model Notification {
-  id         String   @id @default(uuid())
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  category   String   // MILESTONE, NEAR_COMPLETION, RESTOCK, NEW_ARRIVAL, SYSTEM, ADMIN
-  title      String
-  body       String
-  linkUrl    String?
-  icon       String   @default("🔔")
-  isRead     Boolean  @default(false)
-  dedupeKey  String?  // prevents duplicate notifications
+  category  String // MILESTONE, NEAR_COMPLETION, RESTOCK, NEW_ARRIVAL, SYSTEM, ADMIN
+  title     String
+  body      String
+  linkUrl   String?
+  icon      String  @default("🔔")
+  isRead    Boolean @default(false)
+  dedupeKey String? // prevents duplicate notifications
 
-  createdAt  DateTime @default(now())
-  readAt     DateTime?
+  createdAt DateTime  @default(now())
+  readAt    DateTime?
 
   @@index([userId])
   @@index([userId, isRead])
@@ -894,47 +908,47 @@ model Notification {
 
 // ─── NotificationPreference (Phase 2D — per-user channel settings) ──
 model NotificationPreference {
-  id                  String   @id @default(uuid())
-  userId              String   @unique
-  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // In-app toggles
-  inAppMilestone      Boolean  @default(true)
-  inAppNearCompletion Boolean  @default(true)
-  inAppRestock        Boolean  @default(true)
-  inAppNewArrival     Boolean  @default(true)
+  inAppMilestone      Boolean @default(true)
+  inAppNearCompletion Boolean @default(true)
+  inAppRestock        Boolean @default(true)
+  inAppNewArrival     Boolean @default(true)
 
   // Email toggles
-  emailMilestone      Boolean  @default(true)
-  emailNearCompletion Boolean  @default(false)
-  emailRestock        Boolean  @default(true)
-  emailNewArrival     Boolean  @default(false)
+  emailMilestone      Boolean @default(true)
+  emailNearCompletion Boolean @default(false)
+  emailRestock        Boolean @default(true)
+  emailNewArrival     Boolean @default(false)
 
   // Weekly digest of low-signal events
-  weeklyDigest        Boolean  @default(true)
-  maxEmailsPerWeek    Int      @default(5)
-  mutedUntil          DateTime?
+  weeklyDigest     Boolean   @default(true)
+  maxEmailsPerWeek Int       @default(5)
+  mutedUntil       DateTime?
 
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 // ─── Milestone (achievement / badge system) ──────────────────
 // Auto-detected achievements based on collection progress
 model Milestone {
-  id            String   @id @default(uuid())
-  userId        String
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  type          String   // "first_element", "group_complete", "format_complete",
-                         // "count_10", "count_25", "count_50", "count_100", "full_set",
-                         // "noble_gases", "alkali_metals", "lanthanides", "actinides"
-  title         String   // "First Element!", "Noble Gas Master", etc.
-  description   String   // Human-readable achievement text
-  icon          String   @default("🏆") // Emoji icon
-  metadata      String   @default("{}") // JSON: { groupKey, format, count, etc. }
+  type        String // "first_element", "group_complete", "format_complete",
+  // "count_10", "count_25", "count_50", "count_100", "full_set",
+  // "noble_gases", "alkali_metals", "lanthanides", "actinides"
+  title       String // "First Element!", "Noble Gas Master", etc.
+  description String // Human-readable achievement text
+  icon        String @default("🏆") // Emoji icon
+  metadata    String @default("{}") // JSON: { groupKey, format, count, etc. }
 
-  earnedAt      DateTime @default(now())
+  earnedAt DateTime @default(now())
 
   @@unique([userId, type])
   @@index([userId])
@@ -944,20 +958,20 @@ model Milestone {
 // ─── CollectionGoalV2 (user-selected collection goals) ───────
 // Set during onboarding step 2, tracks what the user wants to achieve
 model CollectionGoalV2 {
-  id            String   @id @default(uuid())
-  userId        String
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  goalType      String   // "full_set", "format_complete", "group_complete", "count_target"
-  targetFormat  String?  // If format_complete: "lucite", "10mm", etc.
-  targetGroup   String?  // If group_complete: "noble_gases", "lanthanides", etc.
-  targetCount   Int?     // If count_target: target number
+  goalType     String // "full_set", "format_complete", "group_complete", "count_target"
+  targetFormat String? // If format_complete: "lucite", "10mm", etc.
+  targetGroup  String? // If group_complete: "noble_gases", "lanthanides", etc.
+  targetCount  Int? // If count_target: target number
 
-  title         String   // Display title: "Complete Lucite Collection"
-  isActive      Boolean  @default(true)
+  title    String // Display title: "Complete Lucite Collection"
+  isActive Boolean @default(true)
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
   @@index([userId, isActive])
@@ -966,18 +980,130 @@ model CollectionGoalV2 {
 // ─── ActivityLog (collection activity feed) ──────────────────
 // Tracks all collection-related events for the activity feed
 model ActivityLog {
-  id            String   @id @default(uuid())
-  userId        String
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  action        String   // "added_element", "removed_element", "state_changed",
-                         // "milestone_earned", "goal_set", "goal_completed"
-  elementSymbol String?  // Related element (if applicable)
-  details       String   @default("{}") // JSON: { from, to, format, milestoneType, etc. }
+  action        String // "added_element", "removed_element", "state_changed",
+  // "milestone_earned", "goal_set", "goal_completed"
+  elementSymbol String? // Related element (if applicable)
+  details       String  @default("{}") // JSON: { from, to, format, milestoneType, etc. }
 
-  createdAt     DateTime @default(now())
+  createdAt DateTime @default(now())
 
   @@index([userId])
   @@index([userId, createdAt])
   @@index([action])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// APPSTLE SUBSCRIPTION INTEGRATION
+// See docs/SUBSCRIPTION_ARCHITECTURE.md §6 for the full blueprint.
+// ═══════════════════════════════════════════════════════════════
+
+// ─── AppstleWebhookLog ──────────────────────────────────────
+// Dedicated log for Appstle webhook events (separate from WebhookEventLog,
+// which tracks Shopify webhooks). Drives idempotency + retry semantics.
+model AppstleWebhookLog {
+  id                String    @id @default(uuid())
+  eventType         String // "subscription/created", "billing_attempt/succeeded", etc.
+  appstleContractId String? // Appstle contract ID from payload
+  customerEmail     String? // Customer email from payload
+  payload           String // Full JSON payload (text for PG compat)
+  status            String    @default("received") // received, processing, processed, failed, retrying, duplicate
+  errorMsg          String?
+  retryCount        Int       @default(0)
+  maxRetries        Int       @default(3)
+  processedAt       DateTime?
+  receivedAt        DateTime  @default(now())
+  idempotencyKey    String?   @unique // Prevent duplicate processing
+
+  @@index([eventType])
+  @@index([status])
+  @@index([appstleContractId])
+  @@index([receivedAt])
+  @@index([customerEmail])
+}
+
+// ─── SubscriptionTier ───────────────────────────────────────
+// Maps Appstle selling plans to the Cabinet's assignment configuration.
+// Distinct from MembershipTier (which tracks store-credit tiers).
+model SubscriptionTier {
+  id                   String  @id @default(uuid())
+  name                 String  @unique // "10mm_monthly", "25.4mm_monthly", "lucite_monthly"
+  displayName          String // "10mm Cubes — Monthly"
+  collectionType       String // "10mm", "25.4mm", "lucite"
+  appstleSellingPlanId String? @unique // Appstle selling plan GID
+  shopifySellingPlanId String? @unique // Shopify selling plan GID
+
+  monthlyPrice         Float // $29.99, $39.99, $49.99
+  billingInterval      String @default("MONTH") // MONTH, QUARTER
+  billingIntervalCount Int    @default(1)
+
+  // Product eligibility rules
+  excludePreciousMetals Boolean @default(true) // Always true for Luciteria
+  maxDiscountPercent    Float   @default(0.20) // 20% default cap
+  itemsPerShipment      Int     @default(1)
+
+  // Assignment strategy defaults
+  defaultStrategy String  @default("wishlist_priority")
+  allowDuplicates Boolean @default(false)
+
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([collectionType])
+  @@index([isActive])
+}
+
+// ─── BillingEvent ───────────────────────────────────────────
+// Ledger of all billing events from Appstle for an audit trail.
+model BillingEvent {
+  id               String    @id @default(uuid())
+  subscriptionId   String
+  customerId       String
+  appstleBillingId String?   @unique // Appstle billing attempt ID
+  shopifyOrderId   String? // Shopify order created by billing
+  eventType        String // "charge_success", "charge_failed", "refund"
+  amount           Float
+  currency         String    @default("USD")
+  billingDate      DateTime
+  nextBillingDate  DateTime?
+  metadata         String? // JSON blob for extra Appstle data
+
+  createdAt DateTime @default(now())
+
+  @@index([subscriptionId])
+  @@index([customerId])
+  @@index([billingDate])
+  @@index([eventType])
+}
+
+// ─── AssignmentPreview ──────────────────────────────────────
+// Pre-computed sequence of the next N product assignments per subscriber.
+// Recalculated on: new subscription, billing success, inventory change,
+// collection type change, preference change.
+model AssignmentPreview {
+  id                String   @id @default(uuid())
+  subscriptionId    String
+  customerId        String
+  sequencePosition  Int // 1 = next shipment, 2 = month after, etc.
+  productId         String? // Assigned product (null if no eligible product)
+  productSku        String?
+  productTitle      String?
+  estimatedDate     DateTime
+  estimatedDiscount Float? // Pre-calculated discount %
+  status            String   @default("preview") // "preview", "confirmed", "shifted"
+  shiftedReason     String? // "oos", "admin_override", "preference_change"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([subscriptionId, sequencePosition])
+  @@index([subscriptionId])
+  @@index([customerId])
+  @@index([productId])
 }
