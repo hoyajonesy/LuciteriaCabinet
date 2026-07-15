@@ -1,0 +1,106 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Shopify "Live Working Theme" design tokens (consumer-facing pages only).
+   Admin routes (/admin/*) deliberately keep their own styling.
+   ───────────────────────────────────────────────────────────────────────── */
+:root {
+  --luc-blue: #5781D8;
+  --luc-blue-hover: #4a6fc0;
+  --luc-ink: #0D0D0D;
+  --luc-text: rgba(0, 0, 0, 0.81);
+  --luc-gray: #F5F5F5;
+  --luc-bluegray: #E1EDF5;
+  --luc-charcoal: #333333;
+  --luc-muted: #A5A5A5;
+  --luc-border: #DFDFDF;
+}
+
+@layer components {
+  /* Primary CTA — blue, used for Add to cart / Subscribe / Get started */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-btn bg-luc-blue px-8 py-4 text-base font-normal text-white transition-colors duration-200 hover:bg-luc-blue-hover disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  /* Solid black secondary — Continue shopping / View all */
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-btn-lg bg-black px-8 py-4 text-base font-normal text-white transition-opacity duration-200 hover:opacity-90;
+  }
+  /* Outline — View all products */
+  .btn-outline {
+    @apply inline-flex items-center justify-center gap-2 rounded-btn border-[1.5px] border-luc-ink bg-transparent px-6 py-[15px] text-base font-normal text-luc-ink transition-colors duration-200 hover:bg-luc-ink hover:text-white;
+  }
+  /* Blue outline — active filter tab */
+  .btn-outline-blue {
+    @apply inline-flex items-center justify-center gap-2 rounded-btn border-[1.5px] border-luc-blue bg-transparent px-6 py-[15px] text-base font-normal text-luc-blue transition-colors duration-200 hover:bg-luc-blue hover:text-white;
+  }
+  /* Theme card — light gray, large radius */
+  .luc-card {
+    @apply rounded-card bg-luc-gray p-6 sm:p-8;
+  }
+  .luc-input {
+    @apply w-full rounded-btn border-[1.5px] border-luc-border bg-white/80 px-4 py-3 text-base text-luc-text placeholder:text-luc-muted focus:border-luc-blue focus:outline-none;
+  }
+  .luc-heading {
+    @apply font-heading text-luc-ink;
+  }
+}
+
+/* ─── Wireframe periodic table (shared by collection, log-owned, notes overlay) ─── */
+/* Mobile-first: tight 2px gap so all 18 columns fit on a 375px viewport */
+.ptable{display:grid;grid-template-columns:repeat(18,minmax(0,1fr));gap:2px;}
+.frow{display:grid;grid-template-columns:repeat(18,minmax(0,1fr));gap:2px;}
+.cell{aspect-ratio:1/1;border-radius:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#fff;border:1px solid #d1d5db;position:relative;cursor:pointer;}
+/* Responsive font sizes: mobile-first approach */
+/* Small screens (<768px): verified legible & fully fitting at 375px (iPhone SE) */
+.cell .num{position:absolute;top:1px;left:1px;font-size:6px;color:#9ca3af;}
+.cell .sym{font-size:10px;font-weight:600;color:#4b5563;line-height:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:96%;padding:0 1px;}
+.cell .nm{display:none;}
+/* Medium screens (768px+): tablet/laptop — restore comfortable gap & sizes */
+@media (min-width: 768px) {
+  .ptable, .frow{gap:4px;}
+  .cell .num{font-size:11px;top:2px;left:3px;}
+  .cell .sym{font-size:18px;padding:0 2px;}
+}
+/* Large screens (1024px+): desktop/laptop */
+@media (min-width: 1024px) {
+  .cell .num{font-size:13px;}
+  .cell .sym{font-size:22px;}
+}
+.cell.owned{border:2px solid #22c55e;}
+.cell.wanted{border:2px solid #f59e0b;}
+.cell.watch{border:2px solid #3b82f6;}
+.cell.owned .chk{position:absolute;top:2px;right:3px;font-size:6px;color:#22c55e;}
+.cell .cnt{position:absolute;top:1px;right:2px;min-width:11px;height:11px;padding:0 2px;border-radius:6px;background:#4b5563;color:#fff;font-size:7px;font-weight:600;line-height:11px;text-align:center;}
+.cell.selected{border:2px solid #4b5563;box-shadow:0 0 0 3px rgba(75,85,99,.25);}
+.dim-missing .cell:not(.owned):not(.wanted):not(.watch){opacity:.35;}
+/* Onboarding log-owned: keep cells the same size as the Shop/Periodic-table pages.
+   On small screens the table is allowed to scroll horizontally (matching the Shop
+   page behaviour) so element symbols never shrink/truncate or overlap the number. */
+@media (max-width: 767px) {
+  .onb-ptable .ptable, .onb-ptable .frow { min-width: 430px; }
+}
+/* add-to-wishlist compact cells */
+.el{border:1px solid #d1d5db;background:#f9fafb;border-radius:3px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:9px;color:#6b7280;height:34px;cursor:pointer;}
+.el .num{font-size:7px;color:#9ca3af;line-height:1;}
+.el .sym{font-size:11px;font-weight:600;color:#374151;line-height:1.1;}
+.el.sel{background:#6b7280;border-color:#4b5563;color:#fff;}
+.el.sel .sym,.el.sel .num{color:#fff;}
+
+/* Brand icon only shows when the sidebar is collapsed (mobile) */
+.brand-icon { display: none; }
+
+/* Responsive sidebar collapse */
+@media (max-width: 768px) {
+  .luc-sidebar {
+    width: 60px !important;
+    overflow: hidden;
+  }
+  .luc-sidebar .brand-text,
+  .luc-sidebar .link-label,
+  .luc-sidebar .footer-text {
+    display: none !important;
+  }
+  .luc-sidebar .brand-icon { display: block !important; }
+}

@@ -1,0 +1,983 @@
+// Luciteria Collector Cabinet — Database Schema (Phase 2.5 Production-Ready)
+//
+// Phase 2.5 additions:
+// - Shopify ID fields on Customer, Product, Subscription, Shipment
+// - WebhookEventLog for tracking inbound Shopify webhooks
+// - ShopifySyncStatus for tracking data sync state
+// - Performance indexes on frequently queried columns
+// - PostgreSQL-ready (switch datasource provider for production)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── User (Authentication & Onboarding) ──────────────────────
+// TODO PRODUCTION: Replace email/password auth with Shopify OAuth
+// This model handles standalone auth for the prototype.
+// In production, Shopify OAuth will provide the session/identity.
+model User {
+  id                  String   @id @default(uuid())
+  email               String   @unique
+  passwordHash        String   // TODO PRODUCTION: Remove — Shopify OAuth replaces this
+  firstName           String
+  lastName            String
+  isSubscriber        Boolean  @default(false)
+  subscriptionFormat  String?  // "10mm", "25.4mm", "50mm", "lucite", "ampoules"
+  trackedFormats      String   @default("[]") // JSON array of formats tracked (for collectors)
+  onboardingCompleted Boolean  @default(false)
+  onboardingStep      Int      @default(1) // Current onboarding step (1-5)
+  wishlistToken       String   @unique // UUID for public wishlist sharing
+  userType            String   @default("collector") // "subscriber" or "collector"
+  isStaff             Boolean  @default(false) // Admin access flag
+  tooltipsDismissed   Boolean  @default(false) // First-time user tooltips
+  primaryMotivation   String?  // Phase 2: INVENTORY, SOCIAL, ACQUISITION, INVESTMENT, DISCOVERY
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  // Password reset fields
+  resetToken          String?  @unique
+  resetTokenExpiry    DateTime?
+
+  // ─── Admin MVP: Account status & tier ───
+  status              String   @default("active") // "active", "frozen"
+  freezeReason        String?  // Reason for account freeze
+  tier                String   @default("Free") // "Free", "Collector", "Curator"
+
+  // ─── Membership / Subscription fields ───
+  membershipTierId    String?
+  membershipTier      MembershipTier? @relation(fields: [membershipTierId], references: [id])
+  storeCreditBalance  Float    @default(0)
+  subscriptionStatus  String   @default("NONE") // NONE, ACTIVE, PAUSED, CANCELLED
+
+  // Relationships
+  ownedElements       UserElement[]
+  wishlistElements    UserWishlistElement[]
+  userSubscriptions   UserSubscription[]
+  creditTransactions  CreditTransaction[]
+  ownedSkus           UserOwnedSku[]
+  completionGoals     CompletionGoal[]
+
+  // ─── Collection-first relationships (Phase 1 refactor) ───
+  collectionItems     CollectionItem[]
+  milestones          Milestone[]
+  collectionGoalsV2   CollectionGoalV2[]
+  activityLogs        ActivityLog[]
+
+  // ─── Phase 2 engagement relationships ───
+  elementNotes           ElementNote[]
+  elementSamples         ElementSample[]
+  notifications          Notification[]
+  notificationPreference NotificationPreference?
+
+  // ─── Admin MVP relationships ───
+  freezeLogs             FreezeLog[]
+  userMilestoneAwards    UserMilestoneAward[]
+
+  @@index([email])
+  @@index([wishlistToken])
+  @@index([membershipTierId])
+  @@index([status])
+  @@index([resetToken])
+}
+
+// ─── User's Owned Elements (onboarding + manual tracking) ────
+model UserElement {
+  id            String   @id @default(uuid())
+  userId        String
+  elementSymbol String
+  elementName   String
+  atomicNumber  Int
+  format        String?  // Which format they own this in
+  addedAt       DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, elementSymbol])
+  @@index([userId])
+}
+
+// ─── User's Wishlisted Elements ──────────────────────────────
+model UserWishlistElement {
+  id            String   @id @default(uuid())
+  userId        String
+  elementSymbol String
+  elementName   String
+  atomicNumber  Int
+  priority      Int      @default(0)
+  addedAt       DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, elementSymbol])
+  @@index([userId])
+}
+
+// ─── Customer ─────────────────────────────────────────────────
+model Customer {
+  id              String   @id @default(uuid())
+  shopifyId       String?  @unique  // Shopify Customer GID
+  shopifyCustomerId String? @unique // Numeric Shopify customer ID
+  email           String   @unique
+  firstName       String
+  lastName        String
+  displayName     String   // e.g. "The Completionist"
+  avatarUrl       String?
+  collectionType  String   @default("lucite") // "10mm", "25.4mm", "50mm", "lucite", "ampoules"
+  onboardedAt     DateTime? // When collection type was chosen
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relationships
+  collectionRecords CollectionRecord[]
+  wishlistItems     WishlistItem[]
+  subscription      Subscription?
+  preferences       CustomerPreference?
+  shipments         SubscriptionShipment[]
+  exceptions        AssignmentException[]
+  adminNotes        AdminNote[]
+  collectionTypeChanges CollectionTypeChange[]
+  notifications     NotificationLog[]
+
+  // Indexes for common queries
+  @@index([collectionType])
+  @@index([email])
+  @@index([createdAt])
+}
+
+// ─── Product / Collectible ────────────────────────────────────
+model Product {
+  id               String   @id @default(uuid())
+  shopifyProductId  String?  @unique // Shopify Product GID
+  shopifyVariantId  String?  @unique // Shopify Variant GID
+  shopifyInventoryItemId String? // Shopify Inventory Item ID (for stock tracking)
+  handle           String?
+  title            String
+  description      String   @default("") // HTML body from Shopify
+  sku              String   @unique
+  elementSymbol    String   // e.g. "Sr", "Na"
+  elementName      String   // e.g. "Strontium", "Sodium"
+  atomicNumber     Int
+  category         String   // "Lucite Cube", "Metal Bar", "Ampoule", etc.
+  format           String   // "50mm", "31mm", "10mm", "ampoule", etc.
+  collectionTypes  String   @default("[]") // JSON array of collection types
+  status           String   @default("Active") // "Active", "Archived", "Draft"
+  inventoryQty     Int      @default(0)
+  priceUsd         Float    @default(0)
+  retailPrice      Float    @default(0) // Full retail price
+  subscriptionCost Float?   // Cost basis for margin/discount calculation
+  imageUrl         String?
+  rarityTier       String   @default("common")
+  availableForSubscription Boolean @default(false)
+  tags             String   @default("[]") // JSON array of Shopify tags
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relationships
+  collectionRecords CollectionRecord[]
+  wishlistItems     WishlistItem[]
+  shipmentItems     ShipmentItem[]
+  inventoryLog      InventoryLog[]
+  pricingHistory    PricingHistory[]
+
+  // Indexes
+  @@index([elementSymbol])
+  @@index([atomicNumber])
+  @@index([status])
+  @@index([category])
+  @@index([availableForSubscription, status])
+}
+
+// ─── Collection Record (what a customer owns) ─────────────────
+model CollectionRecord {
+  id             String   @id @default(uuid())
+  customerId     String
+  productId      String
+  acquiredVia    String   // "purchase", "subscription", "gift", "trade"
+  acquiredDate   DateTime @default(now())
+  collectionType String?  // Which collection this belongs to
+  notes          String?
+
+  customer Customer @relation(fields: [customerId], references: [id])
+  product  Product  @relation(fields: [productId], references: [id])
+
+  @@unique([customerId, productId])
+  @@index([customerId])
+}
+
+// ─── Wishlist ─────────────────────────────────────────────────
+model WishlistItem {
+  id           String   @id @default(uuid())
+  customerId   String
+  productId    String
+  priority     Int      @default(0)
+  notifyOnRestock Boolean @default(false)
+  addedAt      DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id])
+  product  Product  @relation(fields: [productId], references: [id])
+
+  @@unique([customerId, productId])
+  @@index([customerId])
+}
+
+// ─── Subscription ─────────────────────────────────────────────
+model Subscription {
+  id                String   @id @default(uuid())
+  customerId        String   @unique
+  shopifyContractId String?  @unique // Shopify Subscription Contract GID
+  planName          String
+  planTier          String
+  status            String   // "active", "paused", "cancelled", "past_due"
+  billingCadence    String   // "monthly", "quarterly", "annual"
+  priceUsd          Float
+  collectionType    String?  // Subscription collection type
+  originalPrice     Float?   // Price at signup (for grandfathering)
+  currentPrice      Float?   // Current plan price
+  priceLockedAt     DateTime? // When price was locked
+  priceExpiresAt    DateTime? // When grandfather period ends
+  grandfathered     Boolean  @default(false)
+  pausedDays        Int      @default(0) // Total days paused
+  nextShipmentDate  DateTime
+  nextBillingDate   DateTime
+  startDate         DateTime
+  pausedAt          DateTime?
+  cancelledAt       DateTime?
+  itemsPerShipment  Int      @default(1)
+
+  customer  Customer @relation(fields: [customerId], references: [id])
+  shipments SubscriptionShipment[]
+
+  // Indexes
+  @@index([status])
+  @@index([nextShipmentDate])
+  @@index([collectionType])
+}
+
+// ─── Subscription Shipment ────────────────────────────────────
+model SubscriptionShipment {
+  id              String   @id @default(uuid())
+  subscriptionId  String
+  customerId      String
+  shopifyOrderId  String?  // Shopify Order GID
+  shopifyDraftOrderId String? // Shopify Draft Order GID
+  shipmentDate    DateTime
+  status          String   // "scheduled", "assigned", "ordered", "paid", "shipped", "delivered", "skipped"
+  trackingNumber  String?
+  trackingUrl     String?
+  trackingCompany String?  // e.g. "FedEx", "UPS"
+  assignedBy      String   @default("auto") // "auto" or admin email
+  retailPrice     Float?
+  assignedPrice   Float?   // Subscription price customer paid
+  discountPercent Float?
+  notes           String?
+  createdAt       DateTime @default(now())
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id])
+  customer     Customer     @relation(fields: [customerId], references: [id])
+  items        ShipmentItem[]
+
+  // Indexes
+  @@index([customerId])
+  @@index([status])
+  @@index([shipmentDate])
+}
+
+// ─── Shipment Item ────────────────────────────────────────────
+model ShipmentItem {
+  id          String @id @default(uuid())
+  shipmentId  String
+  productId   String
+
+  shipment SubscriptionShipment @relation(fields: [shipmentId], references: [id])
+  product  Product              @relation(fields: [productId], references: [id])
+
+  @@index([shipmentId])
+}
+
+// ─── Customer Preferences ─────────────────────────────────────
+model CustomerPreference {
+  id                    String  @id @default(uuid())
+  customerId            String  @unique
+  duplicateHandling     String  @default("never")
+  preferredCategories   String  @default("[]") // JSON array
+  excludedCategories    String  @default("[]") // JSON array
+  preferredFormats      String  @default("[]") // JSON array
+  budgetMaxUsd          Float?
+  communicationEmail    Boolean @default(true)
+  communicationSms      Boolean @default(false)
+  shipmentNotifications Boolean @default(true)
+  restockAlerts         Boolean @default(true)
+  priceChangeAlerts     Boolean @default(true)
+
+  customer Customer @relation(fields: [customerId], references: [id])
+}
+
+// ─── Assignment Exception (manual review queue) ───────────────
+model AssignmentException {
+  id           String   @id @default(uuid())
+  customerId   String
+  reason       String   // "no_eligible_items", "duplicate_risk", "inventory_conflict", "discount_exceeded", "high_discount"
+  details      String
+  status       String   @default("pending") // "pending", "resolved", "skipped"
+  resolvedBy   String?
+  resolvedAt   DateTime?
+  resolution   String?
+  createdAt    DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([status])
+  @@index([customerId])
+}
+
+// ─── Inventory Log ────────────────────────────────────────────
+model InventoryLog {
+  id          String   @id @default(uuid())
+  productId   String
+  prevQty     Int
+  newQty      Int
+  reason      String   // "shopify_sync", "manual_adjust", "shipment", "restock"
+  source      String   @default("manual") // "shopify_webhook", "manual", "assignment_engine"
+  createdAt   DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([productId])
+  @@index([createdAt])
+}
+
+// ─── Admin Notes ──────────────────────────────────────────────
+model AdminNote {
+  id         String   @id @default(uuid())
+  customerId String
+  authorName String
+  content    String
+  createdAt  DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([customerId])
+}
+
+// ─── Collection Type Change History ───────────────────────────
+model CollectionTypeChange {
+  id           String   @id @default(uuid())
+  customerId   String
+  previousType String
+  newType      String
+  reason       String?  // "initial_selection", "admin_override", "customer_request"
+  changedBy    String   @default("customer")
+  createdAt    DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([customerId])
+}
+
+// ─── Pricing History ──────────────────────────────────────────
+model PricingHistory {
+  id              String   @id @default(uuid())
+  productId       String
+  priceUsd        Float
+  retailPrice     Float
+  subscriptionCost Float?
+  effectiveDate   DateTime @default(now())
+  notes           String?
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([productId])
+  @@index([effectiveDate])
+}
+
+// ─── Notification Log ─────────────────────────────────────────
+model NotificationLog {
+  id          String   @id @default(uuid())
+  customerId  String?
+  channel     String   // "email", "webhook", "sms"
+  template    String?
+  event       String?
+  subject     String?
+  recipient   String
+  status      String   @default("sent") // "sent", "delivered", "failed", "bounced"
+  sentAt      DateTime @default(now())
+  metadata    String?  // JSON blob for extra data
+
+  customer Customer? @relation(fields: [customerId], references: [id])
+
+  @@index([customerId])
+  @@index([sentAt])
+  @@index([event])
+}
+
+// ─── Webhook Event Log (Phase 2.5) ───────────────────────────
+// Tracks all inbound Shopify webhooks for debugging and replay
+model WebhookEventLog {
+  id          String   @id @default(uuid())
+  topic       String   // e.g. "products/update", "orders/create"
+  shopifyId   String?  // The Shopify resource ID from the payload
+  payload     String   // Full JSON payload (stored as text for SQLite compat)
+  status      String   @default("received") // "received", "processed", "failed", "retrying"
+  errorMsg    String?
+  processedAt DateTime?
+  receivedAt  DateTime @default(now())
+
+  @@index([topic])
+  @@index([status])
+  @@index([receivedAt])
+}
+
+// ─── Shopify Sync Status (Phase 2.5) ─────────────────────────
+// Tracks the last sync time and status for each data type
+model ShopifySyncStatus {
+  id            String   @id @default(uuid())
+  resourceType  String   @unique // "products", "customers", "inventory", "orders"
+  lastSyncAt    DateTime?
+  lastSyncStatus String  @default("never") // "never", "success", "partial", "failed"
+  itemsSynced   Int      @default(0)
+  errorMsg      String?
+  updatedAt     DateTime @updatedAt
+
+  @@index([resourceType])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// COLLECTOR SUBSCRIPTION SYSTEM — Phase 1/2/3
+// ═══════════════════════════════════════════════════════════════
+
+// ─── Membership Tiers (max 3 enforced in app logic) ─────────
+model MembershipTier {
+  id                String   @id @default(uuid())
+  name              String   @unique  // "Bronze", "Silver", "Gold"
+  displayName       String
+  monthlyPrice      Float
+  storeCredit       Float    // Monthly credit amount
+  sortOrder         Int      // 1, 2, 3
+  isActive          Boolean  @default(true)
+  earlyAccessDays   Int      @default(0) // Days before public launch
+
+  users             User[]
+  packs             CollectorPack[]
+  userSubscriptions UserSubscription[]
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([sortOrder])
+}
+
+// ─── User Subscription (membership billing management) ──────
+model UserSubscription {
+  id                String   @id @default(uuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id])
+
+  tierId            String
+  tier              MembershipTier @relation(fields: [tierId], references: [id])
+
+  status            String   // ACTIVE, PAUSED, CANCELLED
+  billingCycle      String   // MONTHLY, QUARTERLY
+  nextBillingDate   DateTime
+
+  canSkipNext       Boolean  @default(true)
+  skippedMonths     String   @default("[]") // JSON array of skipped dates
+
+  pausedAt          DateTime?
+  cancelledAt       DateTime?
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
+
+// ─── Store Credit Tracking ──────────────────────────────────
+model CreditTransaction {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+
+  amount        Float
+  type          String   // MONTHLY_GRANT, PURCHASE, REFUND, SPENT
+  description   String
+
+  balanceBefore Float
+  balanceAfter  Float
+
+  createdAt     DateTime @default(now())
+
+  @@index([userId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+// ─── Product/SKU Subscription Eligibility ───────────────────
+model SubscriptionSku {
+  id                String   @id @default(uuid())
+  sku               String   @unique
+  productId         String   // Link to Shopify product
+
+  isEligible        Boolean  @default(false)
+  isSubscriberOnly  Boolean  @default(false)
+  isEarlyAccess     Boolean  @default(false)
+
+  minTierId         String?  // Minimum tier required
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([isEligible])
+}
+
+// ─── Pre-built Collector Packs (Phase 1) ────────────────────
+model CollectorPack {
+  id              String   @id @default(uuid())
+  name            String
+  description     String
+
+  itemCount       Int      // 3 or 5 fixed
+  skuList         String   // JSON array of SKU strings
+
+  tierId          String?  // Optional tier restriction
+  tier            MembershipTier? @relation(fields: [tierId], references: [id])
+
+  price           Float?   // Optional override price
+  creditCost      Float?   // Cost in store credits
+
+  isActive        Boolean  @default(true)
+  stockLimit      Int?     // Optional limit
+
+  imageUrl        String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+// ─── Pack Orders (admin approval queue) ─────────────────────
+model PackOrder {
+  id              String   @id @default(uuid())
+  userId          String
+  packId          String
+  packName        String
+
+  status          String   @default("PENDING") // PENDING, ADMIN_APPROVED, FULFILLED, REJECTED
+  paymentMethod   String   // CREDIT, DIRECT
+  creditAmount    Float    @default(0)
+  cashAmount      Float    @default(0)
+
+  skuList         String   // JSON array — snapshot of pack SKUs at order time
+  adminNotes      String?
+  approvedBy      String?
+  approvedAt      DateTime?
+  fulfilledAt     DateTime?
+  rejectedAt      DateTime?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
+
+// ─── PHASE 2: Ownership tracking (built but dormant) ────────
+model UserOwnedSku {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+
+  sku             String
+  elementSymbol   String?  // Mapped from SKU
+  format          String?  // 10mm, 25.4mm, etc.
+
+  acquiredDate    DateTime @default(now())
+  source          String   // PURCHASE, SUBSCRIPTION, GIFT
+
+  @@unique([userId, sku])
+  @@index([userId])
+}
+
+// ─── PHASE 2: Completion goals (built but dormant) ──────────
+model CompletionGoal {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+
+  goalType        String   // FULL_SET, FORMAT_SET, GROUP
+  targetFormat    String?  // 10mm, 25.4mm, etc.
+  targetGroup     String?  // noble_gases, etc.
+
+  targetCount     Int
+  currentCount    Int      @default(0)
+
+  isActive        Boolean  @default(true)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// ─── PHASE 3: Curation requests (scaffold only) ─────────────
+model CurationRequest {
+  id              String   @id @default(uuid())
+  userId          String
+
+  requestType     String   // MISSING_ELEMENTS_QUARTERLY
+  elementCount    Int      // N missing elements
+  cadence         String   // QUARTERLY, etc.
+
+  status          String   @default("PENDING") // PENDING, APPROVED, FULFILLED, REJECTED
+
+  adminNotes      String?
+  approvedBy      String?
+  approvedAt      DateTime?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
+
+// ─── Feature Flags (admin control) ──────────────────────────
+model FeatureFlag {
+  id          String   @id @default(uuid())
+  flagName    String   @unique
+  isEnabled   Boolean  @default(false)
+  description String
+
+  updatedAt   DateTime @updatedAt
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ADMIN BACKEND MVP — New Models
+// ═══════════════════════════════════════════════════════════════
+
+// ─── AdminUser (separate admin authentication) ───────────────
+model AdminUser {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Password reset
+  resetToken      String?   @unique
+  resetTokenExpiry DateTime?
+
+  @@index([email])
+}
+
+// ─── Format (collection format management) ───────────────────
+model Format {
+  id           String   @id @default(uuid())
+  name         String   @unique
+  description  String   @default("")
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([displayOrder])
+}
+
+// ─── CollectionSet (curated element recommendation lists) ────
+model CollectionSet {
+  id          String   @id @default(uuid())
+  name        String
+  description String   @default("")
+  tier        String   @default("Free") // "Free", "Collector", "Curator"
+  setType     String   @default("Starter") // "Starter", "Complete"
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  elements    CollectionSetElement[]
+}
+
+// ─── CollectionSetElement (elements in a set) ────────────────
+model CollectionSetElement {
+  id            String   @id @default(uuid())
+  setId         String
+  elementSymbol String
+  atomicNumber  Int
+
+  set CollectionSet @relation(fields: [setId], references: [id], onDelete: Cascade)
+
+  @@unique([setId, elementSymbol])
+  @@index([setId])
+}
+
+// ─── MilestoneDefinition (types of milestones admins can award) ──
+model MilestoneDefinition {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String   @default("")
+  category    String   @default("collection") // "collection", "format", "engagement"
+  icon        String   @default("🏆")
+  createdAt   DateTime @default(now())
+
+  awards      UserMilestoneAward[]
+}
+
+// ─── UserMilestoneAward (awarded milestones log) ─────────────
+model UserMilestoneAward {
+  id            String   @id @default(uuid())
+  userId        String
+  milestoneId   String
+  awardedBy     String   // admin email who awarded
+  awardedAt     DateTime @default(now())
+
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  milestone MilestoneDefinition @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, milestoneId])
+  @@index([userId])
+  @@index([milestoneId])
+}
+
+// ─── FreezeLog (account freeze/unfreeze history) ─────────────
+model FreezeLog {
+  id         String    @id @default(uuid())
+  userId     String
+  reason     String
+  frozenBy   String    // admin email
+  frozenAt   DateTime  @default(now())
+  unfrozenAt DateTime?
+  unfrozenBy String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─── BulkNotificationLog (sent bulk notification history) ────
+model BulkNotificationLog {
+  id            String   @id @default(uuid())
+  subject       String
+  body          String
+  segment       String   @default("all") // "all", or JSON filter criteria
+  recipientCount Int     @default(0)
+  sentBy        String   // admin email
+  sentAt        DateTime @default(now())
+
+  @@index([sentAt])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// COLLECTION-FIRST REFACTOR — Phase 1
+// ═══════════════════════════════════════════════════════════════
+
+// ─── CollectionItem (unified element state per user) ─────────
+// Replaces separate UserElement + UserWishlistElement with a single
+// model that tracks state: OWNED, WANTED, WATCHLIST, MISSING
+model CollectionItem {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  elementSymbol String   // e.g. "Fe"
+  elementName   String   // e.g. "Iron"
+  atomicNumber  Int
+
+  state         String   @default("MISSING") // OWNED, WANTED, WATCHLIST, MISSING
+  format        String?  // "10mm", "25.4mm", "50mm", "lucite", "ampoules"
+  acquiredDate  DateTime?
+  acquiredVia   String?  // "purchase", "subscription", "gift", "trade", "manual"
+  notes         String?
+
+  // ─── Phase 2: Wishlist context + priority ───
+  priority      Int      @default(0)   // Wishlist ordering: higher = more important (3=High,2=Med,1=Low)
+  contextLabel  String?  // CORE, EXPLORATION, ASPIRATIONAL, UPGRADE_TARGET
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // 1:1 structured provenance note for owned items
+  elementNote   ElementNote?
+  // 1:many physical samples (a collector may own several of the same element)
+  samples       ElementSample[]
+
+  @@unique([userId, elementSymbol])
+  @@index([userId])
+  @@index([state])
+  @@index([userId, state])
+}
+
+// ─── ElementSample (Phase 2 — multiple physical specimens per element) ──
+// A collector can own more than one specimen of the same element
+// (e.g. a 10mm cube AND an ampoule). Each sample has its own provenance.
+model ElementSample {
+  id               String   @id @default(uuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  collectionItemId String
+  collectionItem   CollectionItem @relation(fields: [collectionItemId], references: [id], onDelete: Cascade)
+
+  elementSymbol    String
+
+  acquisitionDate  DateTime?
+  source           String?
+  pricePaid        Float?
+  currency         String   @default("USD")
+  condition        String?   // "Mint", "Excellent", "Good", "Fair", "Damaged"
+  format           String?   // "10mm", "25.4mm", "50mm", "lucite", "ampoules"
+  storageLocation  String?
+  notes            String?
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([userId])
+  @@index([collectionItemId])
+  @@index([userId, elementSymbol])
+}
+
+// ─── ElementNote (Phase 2B — structured provenance for owned items) ──
+model ElementNote {
+  id               String   @id @default(uuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  collectionItemId String   @unique
+  collectionItem   CollectionItem @relation(fields: [collectionItemId], references: [id], onDelete: Cascade)
+
+  elementSymbol    String
+
+  acquisitionDate  DateTime?
+  source           String?   // where acquired (vendor, eBay seller, gift, etc.)
+  pricePaid        Float?    // amount paid
+  currency         String   @default("USD")
+  condition        String?   // "Mint", "Excellent", "Good", "Fair", "Damaged"
+  storageLocation  String?
+  notes            String?   // free-text private notes
+  isPrivate        Boolean  @default(true)
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([userId])
+  @@index([collectionItemId])
+}
+
+// ─── Notification (Phase 2D — in-app inbox item) ──────────────────
+model Notification {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  category   String   // MILESTONE, NEAR_COMPLETION, RESTOCK, NEW_ARRIVAL, SYSTEM, ADMIN
+  title      String
+  body       String
+  linkUrl    String?
+  icon       String   @default("🔔")
+  isRead     Boolean  @default(false)
+  dedupeKey  String?  // prevents duplicate notifications
+
+  createdAt  DateTime @default(now())
+  readAt     DateTime?
+
+  @@index([userId])
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+}
+
+// ─── NotificationPreference (Phase 2D — per-user channel settings) ──
+model NotificationPreference {
+  id                  String   @id @default(uuid())
+  userId              String   @unique
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // In-app toggles
+  inAppMilestone      Boolean  @default(true)
+  inAppNearCompletion Boolean  @default(true)
+  inAppRestock        Boolean  @default(true)
+  inAppNewArrival     Boolean  @default(true)
+
+  // Email toggles
+  emailMilestone      Boolean  @default(true)
+  emailNearCompletion Boolean  @default(false)
+  emailRestock        Boolean  @default(true)
+  emailNewArrival     Boolean  @default(false)
+
+  // Weekly digest of low-signal events
+  weeklyDigest        Boolean  @default(true)
+  maxEmailsPerWeek    Int      @default(5)
+  mutedUntil          DateTime?
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+// ─── Milestone (achievement / badge system) ──────────────────
+// Auto-detected achievements based on collection progress
+model Milestone {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type          String   // "first_element", "group_complete", "format_complete",
+                         // "count_10", "count_25", "count_50", "count_100", "full_set",
+                         // "noble_gases", "alkali_metals", "lanthanides", "actinides"
+  title         String   // "First Element!", "Noble Gas Master", etc.
+  description   String   // Human-readable achievement text
+  icon          String   @default("🏆") // Emoji icon
+  metadata      String   @default("{}") // JSON: { groupKey, format, count, etc. }
+
+  earnedAt      DateTime @default(now())
+
+  @@unique([userId, type])
+  @@index([userId])
+  @@index([type])
+}
+
+// ─── CollectionGoalV2 (user-selected collection goals) ───────
+// Set during onboarding step 2, tracks what the user wants to achieve
+model CollectionGoalV2 {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  goalType      String   // "full_set", "format_complete", "group_complete", "count_target"
+  targetFormat  String?  // If format_complete: "lucite", "10mm", etc.
+  targetGroup   String?  // If group_complete: "noble_gases", "lanthanides", etc.
+  targetCount   Int?     // If count_target: target number
+
+  title         String   // Display title: "Complete Lucite Collection"
+  isActive      Boolean  @default(true)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+  @@index([userId, isActive])
+}
+
+// ─── ActivityLog (collection activity feed) ──────────────────
+// Tracks all collection-related events for the activity feed
+model ActivityLog {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  action        String   // "added_element", "removed_element", "state_changed",
+                         // "milestone_earned", "goal_set", "goal_completed"
+  elementSymbol String?  // Related element (if applicable)
+  details       String   @default("{}") // JSON: { from, to, format, milestoneType, etc. }
+
+  createdAt     DateTime @default(now())
+
+  @@index([userId])
+  @@index([userId, createdAt])
+  @@index([action])
+}
