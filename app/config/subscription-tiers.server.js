@@ -11,7 +11,7 @@
  *   heuristics (`mapSellingPlanToCollectionType`). Do not add new consumers
  *   that read these constants directly for live tier config.
  *
- * Maps Appstle selling plans to Cabinet assignment configuration.
+ * Maps Seal selling plans to Cabinet assignment configuration.
  *
  * See docs/SUBSCRIPTION_ARCHITECTURE.md §7 for the full blueprint.
  *
@@ -88,7 +88,7 @@ export const TIERS_BY_COLLECTION_TYPE = Object.fromEntries(
 );
 
 /**
- * Map an Appstle selling plan (name / metadata) to a Cabinet collection type.
+ * Map an Seal selling plan (name / metadata) to a Cabinet collection type.
  *
  * Resolution order:
  *   1. Explicit `metadata.collection_type`
@@ -96,7 +96,7 @@ export const TIERS_BY_COLLECTION_TYPE = Object.fromEntries(
  *   3. Fuzzy match on the selling plan name
  *   4. Fallback: "lucite"
  *
- * @param {Object} payload - Normalized Appstle webhook payload
+ * @param {Object} payload - Normalized Seal webhook payload
  * @returns {string} collection type ("10mm" | "25.4mm" | "lucite")
  */
 export function mapSellingPlanToCollectionType(payload = {}) {

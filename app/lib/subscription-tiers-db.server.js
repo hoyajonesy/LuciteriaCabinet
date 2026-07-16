@@ -247,7 +247,7 @@ export async function getTierByKey(key) {
 }
 
 /**
- * Match an Appstle (or Shopify) selling plan id to its tier configuration.
+ * Match an Seal (or Shopify) selling plan id to its tier configuration.
  * @param {string} sellingPlanId
  * @returns {Promise<Object|null>}
  */
@@ -275,7 +275,7 @@ export async function getTierByCollectionType(collectionType) {
 }
 
 /**
- * Resolve the tier key ("10mm_monthly" …) from a normalized Appstle payload,
+ * Resolve the tier key ("10mm_monthly" …) from a normalized Seal payload,
  * preferring a DB match on the selling plan id, then metadata/name heuristics.
  * @param {Object} payload
  * @returns {Promise<string|null>}
@@ -291,7 +291,7 @@ export async function resolveTierKey(payload = {}) {
 }
 
 /**
- * Resolve the full tier config from a normalized Appstle payload.
+ * Resolve the full tier config from a normalized Seal payload.
  * @param {Object} payload
  * @returns {Promise<Object>}
  */

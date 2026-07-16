@@ -1,9 +1,9 @@
 /**
  * Luciteria Collector Cabinet — Webhook Idempotency Layer
  *
- * Webhooks can be delivered multiple times (network retries, Appstle retries,
+ * Webhooks can be delivered multiple times (network retries, Seal retries,
  * infrastructure hiccups). Every handler must be idempotent. This module wraps
- * a handler with dedupe + logging against the AppstleWebhookLog table.
+ * a handler with dedupe + logging against the (legacy-named) AppstleWebhookLog table, which now stores Seal webhook events.
  *
  * See docs/SUBSCRIPTION_ARCHITECTURE.md §9.3.
  */
@@ -14,7 +14,7 @@ import { logger } from "./error-handling.server.js";
 const MODULE = "idempotency";
 
 /**
- * Process an Appstle webhook exactly once.
+ * Process a Seal webhook exactly once.
  *
  * Behaviour:
  *  - If a log row with this idempotencyKey is already "processed" → skip, return duplicate.
@@ -24,7 +24,7 @@ const MODULE = "idempotency";
  * @param {Object} params
  * @param {string} params.eventType
  * @param {string} params.idempotencyKey
- * @param {import('../integrations/appstle/appstle-types.js').NormalizedAppstlePayload} params.payload
+ * @param {import('../integrations/seal/seal-types.js').NormalizedSealPayload} params.payload
  * @param {string} params.rawBody - Original raw JSON string (stored for audit)
  * @param {(payload: any, logId: string) => Promise<any>} params.handler
  * @returns {Promise<{ duplicate: boolean, logId: string|null, result: any, error?: string }>}

@@ -1,8 +1,8 @@
 /**
  * Luciteria Collector Cabinet — Customer Identity Resolver
  *
- * Phase 1 identity bridge: Shopify/Appstle customer email == Cabinet user email.
- * Given a normalized Appstle webhook payload, find-or-create the matching
+ * Phase 1 identity bridge: Shopify/Seal customer email == Cabinet user email.
+ * Given a normalized Seal webhook payload, find-or-create the matching
  * Cabinet `User` and `Customer` records.
  *
  * See docs/SUBSCRIPTION_ARCHITECTURE.md §3 (Customer Identity Matching).
@@ -15,10 +15,10 @@ import { logger } from "./error-handling.server.js";
 const MODULE = "customer-resolver";
 
 /**
- * Resolve (find or create) the Cabinet User + Customer for an Appstle payload.
+ * Resolve (find or create) the Cabinet User + Customer for a Seal payload.
  *
- * @param {import('../integrations/appstle/appstle-types.js').NormalizedAppstlePayload} payload
- * @returns {Promise<import('../integrations/appstle/appstle-types.js').ResolvedCustomer>}
+ * @param {import('../integrations/seal/seal-types.js').NormalizedSealPayload} payload
+ * @returns {Promise<import('../integrations/seal/seal-types.js').ResolvedCustomer>}
  */
 export async function resolveCustomer(payload) {
   const email = payload.customerEmail;
@@ -29,7 +29,9 @@ export async function resolveCustomer(payload) {
   const firstName = payload.customerFirstName || "";
   const lastName = payload.customerLastName || "";
   const shopifyCustomerId = payload.shopifyCustomerId || null;
-  const appstleCustomerId = payload.appstleCustomerId || null;
+  // Seal customer id (persisted in the legacy `appstleCustomerId` DB column,
+  // which is now a generic "subscription platform customer id").
+  const sealCustomerId = payload.sealCustomerId || null;
 
   let createdUser = false;
   let createdCustomer = false;
@@ -43,8 +45,8 @@ export async function resolveCustomer(payload) {
         email,
         firstName: firstName || "Collector",
         lastName: lastName || "",
-        // No password — this account is managed externally via Appstle/Shopify.
-        passwordHash: "APPSTLE_MANAGED",
+        // No password — this account is managed externally via Seal/Shopify.
+        passwordHash: "SEAL_MANAGED",
         wishlistToken: crypto.randomUUID(),
         userType: "subscriber",
         isSubscriber: true,
@@ -52,17 +54,17 @@ export async function resolveCustomer(payload) {
         subscriptionFormat: payload.collectionType || null,
         onboardingStep: 1,
         onboardingCompleted: false,
-        appstleCustomerId,
+        appstleCustomerId: sealCustomerId,
         shopifyCustomerId,
       },
     });
     createdUser = true;
-    logger.info(MODULE, `Created Cabinet User from Appstle webhook`, { email });
+    logger.info(MODULE, `Created Cabinet User from Seal webhook`, { email });
   } else {
     // Existing user — ensure subscription flags + external ids are populated.
     const updates = {};
     if (!user.isSubscriber) updates.isSubscriber = true;
-    if (appstleCustomerId && !user.appstleCustomerId) updates.appstleCustomerId = appstleCustomerId;
+    if (sealCustomerId && !user.appstleCustomerId) updates.appstleCustomerId = sealCustomerId;
     if (shopifyCustomerId && !user.shopifyCustomerId) updates.shopifyCustomerId = shopifyCustomerId;
     if (Object.keys(updates).length > 0) {
       // Guard unique constraint clashes (e.g. shopifyCustomerId already used).
@@ -90,7 +92,7 @@ export async function resolveCustomer(payload) {
       },
     });
     createdCustomer = true;
-    logger.info(MODULE, `Created Cabinet Customer from Appstle webhook`, { email });
+    logger.info(MODULE, `Created Cabinet Customer from Seal webhook`, { email });
   } else if (shopifyCustomerId && !customer.shopifyCustomerId) {
     try {
       customer = await prisma.customer.update({

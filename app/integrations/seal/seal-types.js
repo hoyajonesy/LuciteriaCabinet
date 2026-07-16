@@ -1,20 +1,29 @@
 /**
- * Luciteria Collector Cabinet — Appstle Webhook Type Definitions (JSDoc)
+ * Luciteria Collector Cabinet — Seal Subscriptions Webhook Type Definitions (JSDoc)
  *
- * Appstle does not ship official TypeScript types, and payload shapes vary
- * slightly between event types and Appstle versions. These JSDoc typedefs
- * document the *normalized* shape the Cabinet works with after
- * `parseAppstlePayload()` runs.
+ * Seal Subscriptions delivers webhooks with a topic in the "X-Seal-Topic"
+ * header (e.g. "subscription/created", "subscription/updated") and the
+ * subscription payload as JSON in the body. Payload shapes vary slightly
+ * between topics, so these JSDoc typedefs document the *normalized* shape the
+ * Cabinet works with after `parseSealPayload()` runs.
  *
+ * Docs: https://www.sealsubscriptions.com/articles/merchant-api-documentation
  * See docs/SUBSCRIPTION_ARCHITECTURE.md §4.3 for raw payload examples.
  */
 
 /**
- * Canonical Appstle event types the Cabinet handles.
+ * Canonical subscription event types the Cabinet handles.
+ *
+ * Seal's native topics are primarily "subscription/created" and
+ * "subscription/updated" (status transitions ride on "updated" and are
+ * refined by the payload status), plus billing-attempt notifications. The
+ * canonical set below is the internal vocabulary every handler keys off of;
+ * `resolveEventType()` maps Seal's raw topics onto these values.
+ *
  * @readonly
  * @enum {string}
  */
-export const APPSTLE_EVENTS = {
+export const SEAL_EVENTS = {
   SUBSCRIPTION_CREATED: "subscription/created",
   SUBSCRIPTION_UPDATED: "subscription/updated",
   SUBSCRIPTION_CANCELLED: "subscription/cancelled",
@@ -29,24 +38,29 @@ export const APPSTLE_EVENTS = {
 };
 
 /**
- * Appstle subscription status strings (as sent in payloads) normalized to
- * the Cabinet's lowercase Subscription.status values.
+ * Seal subscription status strings (as sent in payloads) normalized to
+ * the Cabinet's lowercase Subscription.status values. Seal commonly uses
+ * ACTIVE / PAUSED / CANCELLED, plus billing states.
  * @readonly
  * @enum {string}
  */
-export const APPSTLE_STATUS_MAP = {
+export const SEAL_STATUS_MAP = {
   ACTIVE: "active",
   ACTIVATED: "active",
+  ENABLED: "active",
   PAUSED: "paused",
+  ON_HOLD: "paused",
   CANCELLED: "cancelled",
   CANCELED: "cancelled",
   EXPIRED: "cancelled",
+  ENDED: "cancelled",
   PAST_DUE: "past_due",
   FAILED: "past_due",
+  UNPAID: "past_due",
 };
 
 /**
- * @typedef {Object} AppstleLineItem
+ * @typedef {Object} SealLineItem
  * @property {string} variantId   - Shopify variant GID or numeric id
  * @property {number} quantity
  * @property {number} price
@@ -55,19 +69,19 @@ export const APPSTLE_STATUS_MAP = {
  */
 
 /**
- * Normalized Appstle webhook payload used across all handlers.
+ * Normalized Seal webhook payload used across all handlers.
  *
- * @typedef {Object} NormalizedAppstlePayload
- * @property {string}  event                 - Canonical event type (see APPSTLE_EVENTS)
- * @property {string}  [subscriptionContractId] - Appstle contract id
- * @property {string}  [shopifyContractId]   - Shopify SubscriptionContract GID
+ * @typedef {Object} NormalizedSealPayload
+ * @property {string}  event                 - Canonical event type (see SEAL_EVENTS)
+ * @property {string}  [subscriptionContractId] - Seal subscription id
+ * @property {string}  [shopifyContractId]   - Shopify SubscriptionContract GID (if present)
  * @property {string}  [customerEmail]       - Lowercased, trimmed customer email
  * @property {string}  [customerFirstName]
  * @property {string}  [customerLastName]
  * @property {string}  [shopifyCustomerId]   - Numeric Shopify customer id
- * @property {string}  [appstleCustomerId]   - Appstle customer id
+ * @property {string}  [sealCustomerId]      - Seal customer id
  * @property {string}  [status]              - Normalized Cabinet status
- * @property {string}  [rawStatus]           - Original Appstle status string
+ * @property {string}  [rawStatus]           - Original Seal status string
  * @property {string}  [sellingPlanId]
  * @property {string}  [sellingPlanName]
  * @property {string}  [sellingPlanGroupName]
@@ -83,8 +97,8 @@ export const APPSTLE_STATUS_MAP = {
  * @property {Date}    [nextBillingDate]
  * @property {Date}    [createdAt]
  * @property {Date}    [updatedAt]
- * @property {AppstleLineItem[]} [lineItems]
- * @property {Object}  [metadata]            - Selling plan metadata { collection_type, tier_key }
+ * @property {SealLineItem[]} [lineItems]
+ * @property {Object}  [metadata]            - Selling plan / rule metadata { collection_type, tier_key }
  * @property {Object}  raw                   - The original, untouched payload
  */
 

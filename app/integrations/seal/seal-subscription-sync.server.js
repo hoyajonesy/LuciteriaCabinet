@@ -1,9 +1,16 @@
 /**
- * Luciteria Collector Cabinet — Appstle → DB Subscription Sync
+ * Luciteria Collector Cabinet — Seal → DB Subscription Sync
  *
  * Creates / updates the Cabinet `Subscription` record from a normalized
- * Appstle webhook payload, and ensures a matching `SubscriptionTier` row
+ * Seal webhook payload, and ensures a matching `SubscriptionTier` row
  * exists (seeded from config on first sight).
+ *
+ * NOTE ON DB COLUMN NAMES: the persisted columns still carry their original
+ * `appstle*` names (`appstleContractId`, `appstleSellingPlanId`,
+ * `appstleSellingPlanName`, `appstleBillingId`). These are now generic
+ * "subscription platform" identifiers and hold Seal Subscriptions values.
+ * The columns are intentionally NOT renamed to avoid a destructive migration;
+ * only the integration layer changed from Appstle to Seal.
  *
  * See docs/SUBSCRIPTION_ARCHITECTURE.md §5 & §6.
  */
@@ -17,10 +24,10 @@ import {
   invalidateTierCache,
 } from "../../lib/subscription-tiers-db.server.js";
 
-const MODULE = "appstle-subscription-sync";
+const MODULE = "seal-subscription-sync";
 
 /**
- * Map a normalized Appstle billing interval to the Cabinet's billingCadence.
+ * Map a normalized Seal billing interval to the Cabinet's billingCadence.
  * @param {string} interval
  * @param {number} count
  * @returns {string}
@@ -35,10 +42,10 @@ function mapBillingCadence(interval, count = 1) {
 
 /**
  * Ensure a SubscriptionTier row exists for this payload's collection type.
- * Seeds from the config constants on first sight; updates the Appstle selling
+ * Seeds from the config constants on first sight; updates the Seal selling
  * plan id if newly learned.
  *
- * @param {import('./appstle-types.js').NormalizedAppstlePayload} payload
+ * @param {import('./seal-types.js').NormalizedSealPayload} payload
  * @returns {Promise<Object|null>} the SubscriptionTier record
  */
 export async function ensureSubscriptionTier(payload) {
@@ -82,7 +89,7 @@ export async function ensureSubscriptionTier(payload) {
         allowDuplicates: cfg.allowDuplicates,
         sortOrder: cfg.sortOrder,
         displayOrder: cfg.displayOrder ?? cfg.sortOrder,
-        createdBy: "appstle-sync",
+        createdBy: "seal-sync",
       },
     });
     invalidateTierCache(); // a new tier row is now available
@@ -99,7 +106,7 @@ export async function ensureSubscriptionTier(payload) {
  *
  * @param {Object} params
  * @param {Object} params.customer - Cabinet Customer record
- * @param {import('./appstle-types.js').NormalizedAppstlePayload} params.payload
+ * @param {import('./seal-types.js').NormalizedSealPayload} params.payload
  * @param {boolean} [params.isNew] - hint that this is a subscription/created event
  * @returns {Promise<Object>} the Subscription record
  */
@@ -114,7 +121,7 @@ export async function syncSubscription({ customer, payload, isNew = false }) {
   const nextBillingDate =
     payload.nextBillingDate || calculateNextBillingDate(now, now);
 
-  // Try to locate an existing subscription — by Appstle contract id, then by customer.
+  // Try to locate an existing subscription — by Seal contract id, then by customer.
   let subscription = null;
   if (payload.subscriptionContractId) {
     subscription = await prisma.subscription.findUnique({
@@ -175,7 +182,7 @@ export async function syncSubscription({ customer, payload, isNew = false }) {
       currentPrice: price,
       priceLockedAt: startDate,
       grandfathered: true,
-      // First shipment is immediate; next billing comes from Appstle.
+      // First shipment is immediate; next billing comes from Seal.
       nextShipmentDate: now,
       nextBillingDate,
       startDate,
@@ -205,7 +212,7 @@ export async function syncSubscription({ customer, payload, isNew = false }) {
  * @param {Object} params
  * @param {Object} params.subscription
  * @param {Object} params.customer
- * @param {import('./appstle-types.js').NormalizedAppstlePayload} params.payload
+ * @param {import('./seal-types.js').NormalizedSealPayload} params.payload
  * @param {"charge_success"|"charge_failed"|"refund"} params.eventType
  * @returns {Promise<Object>} the BillingEvent record
  */

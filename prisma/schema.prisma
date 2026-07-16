@@ -54,8 +54,8 @@ model User {
   storeCreditBalance Float           @default(0)
   subscriptionStatus String          @default("NONE") // NONE, ACTIVE, PAUSED, CANCELLED
 
-  // ─── Appstle / Shopify linkage (for quick webhook lookup) ───
-  appstleCustomerId String? @unique // Appstle's customer identifier
+  // ─── Subscription platform (Seal) / Shopify linkage (for quick webhook lookup) ───
+  appstleCustomerId String? @unique // Subscription platform (Seal) customer identifier
   shopifyCustomerId String? @unique // Shopify numeric customer ID
 
   // Relationships
@@ -254,9 +254,9 @@ model Subscription {
   cancelledAt       DateTime?
   itemsPerShipment  Int       @default(1)
 
-  // ─── Appstle integration fields ───
-  appstleContractId      String?   @unique // Appstle's internal subscription contract ID
-  appstleSellingPlanId   String? // Appstle / Shopify selling plan GID
+  // ─── Subscription platform (Seal) integration fields ───
+  appstleContractId      String?   @unique // Subscription platform (Seal) subscription contract ID
+  appstleSellingPlanId   String? // Seal / Shopify selling plan id
   appstleSellingPlanName String? // Human-readable, e.g. "Lucite Cubes — Monthly"
   lastBillingDate        DateTime? // When the last successful charge occurred
   lastBillingAmount      Float? // Amount of the last successful charge
@@ -997,17 +997,21 @@ model ActivityLog {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// APPSTLE SUBSCRIPTION INTEGRATION
+// SUBSCRIPTION PLATFORM INTEGRATION (Seal Subscriptions)
+// Column/model names prefixed "appstle" are retained from the original
+// integration and now hold Seal identifiers (no destructive migration).
 // See docs/SUBSCRIPTION_ARCHITECTURE.md §6 for the full blueprint.
 // ═══════════════════════════════════════════════════════════════
 
-// ─── AppstleWebhookLog ──────────────────────────────────────
-// Dedicated log for Appstle webhook events (separate from WebhookEventLog,
-// which tracks Shopify webhooks). Drives idempotency + retry semantics.
+// ─── AppstleWebhookLog (subscription-platform webhook log) ──
+// Dedicated log for Seal Subscriptions webhook events (separate from
+// WebhookEventLog, which tracks Shopify webhooks). Drives idempotency + retry
+// semantics. The model name is retained from the original Appstle integration
+// to avoid a destructive migration; it now stores Seal webhook deliveries.
 model AppstleWebhookLog {
   id                String    @id @default(uuid())
   eventType         String // "subscription/created", "billing_attempt/succeeded", etc.
-  appstleContractId String? // Appstle contract ID from payload
+  appstleContractId String? // Seal contract ID from payload
   customerEmail     String? // Customer email from payload
   payload           String // Full JSON payload (text for PG compat)
   status            String    @default("received") // received, processing, processed, failed, retrying, duplicate
@@ -1026,7 +1030,7 @@ model AppstleWebhookLog {
 }
 
 // ─── SubscriptionTier ───────────────────────────────────────
-// Maps Appstle selling plans to the Cabinet's assignment configuration.
+// Maps Seal selling plans to the Cabinet's assignment configuration.
 // Distinct from MembershipTier (which tracks store-credit tiers).
 model SubscriptionTier {
   id                   String  @id @default(uuid())
@@ -1034,7 +1038,7 @@ model SubscriptionTier {
   displayName          String // "10mm Cubes — Monthly"
   description          String? // Long-form marketing/admin description of the tier
   collectionType       String // primary collection type: "10mm", "25.4mm", "lucite"
-  appstleSellingPlanId String? @unique // Appstle selling plan GID
+  appstleSellingPlanId String? @unique // Seal selling plan id
   shopifySellingPlanId String? @unique // Shopify selling plan GID
   shopifyProductId     String? // Shopify product GID backing this subscription plan
 
@@ -1074,19 +1078,19 @@ model SubscriptionTier {
 }
 
 // ─── BillingEvent ───────────────────────────────────────────
-// Ledger of all billing events from Appstle for an audit trail.
+// Ledger of all billing events from the subscription platform (Seal) for an audit trail.
 model BillingEvent {
   id               String    @id @default(uuid())
   subscriptionId   String
   customerId       String
-  appstleBillingId String?   @unique // Appstle billing attempt ID
+  appstleBillingId String?   @unique // Seal billing attempt ID
   shopifyOrderId   String? // Shopify order created by billing
   eventType        String // "charge_success", "charge_failed", "refund"
   amount           Float
   currency         String    @default("USD")
   billingDate      DateTime
   nextBillingDate  DateTime?
-  metadata         String? // JSON blob for extra Appstle data
+  metadata         String? // JSON blob for extra Seal data
 
   createdAt DateTime @default(now())
 

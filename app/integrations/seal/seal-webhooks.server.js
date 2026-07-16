@@ -1,7 +1,7 @@
 /**
- * Luciteria Collector Cabinet — Appstle Webhook Handlers
+ * Luciteria Collector Cabinet — Seal Webhook Handlers
  *
- * Routes normalized Appstle webhook events to their handlers. Each handler is
+ * Routes normalized Seal webhook events to their handlers. Each handler is
  * idempotent (via the idempotency layer that wraps this router) and connects
  * subscription lifecycle events to the existing assignment engine + Shopify
  * draft order flow.
@@ -21,41 +21,41 @@ import {
   syncSubscription,
   ensureSubscriptionTier,
   recordBillingEvent,
-} from "./appstle-subscription-sync.server.js";
-import { APPSTLE_EVENTS } from "./appstle-types.js";
+} from "./seal-subscription-sync.server.js";
+import { SEAL_EVENTS } from "./seal-types.js";
 
-const MODULE = "appstle-webhooks";
+const MODULE = "seal-webhooks";
 
 /**
- * Route a normalized Appstle payload to the correct handler.
+ * Route a normalized Seal payload to the correct handler.
  *
  * @param {string} eventType - canonical event type
- * @param {import('./appstle-types.js').NormalizedAppstlePayload} payload
+ * @param {import('./seal-types.js').NormalizedSealPayload} payload
  * @returns {Promise<{ handled: boolean, action: string, result?: any }>}
  */
-export async function routeAppstleEvent(eventType, payload) {
-  logger.info(MODULE, `Routing Appstle event: ${eventType}`, {
+export async function routeSealEvent(eventType, payload) {
+  logger.info(MODULE, `Routing Seal event: ${eventType}`, {
     contract: payload.subscriptionContractId,
     email: payload.customerEmail,
   });
 
   const handlers = {
-    [APPSTLE_EVENTS.SUBSCRIPTION_CREATED]: handleAppstleSubCreated,
-    [APPSTLE_EVENTS.SUBSCRIPTION_UPDATED]: handleAppstleSubUpdated,
-    [APPSTLE_EVENTS.SUBSCRIPTION_CANCELLED]: handleAppstleCancelled,
-    [APPSTLE_EVENTS.SUBSCRIPTION_PAUSED]: handleAppstlePaused,
-    [APPSTLE_EVENTS.SUBSCRIPTION_ACTIVATED]: handleAppstleActivated,
-    [APPSTLE_EVENTS.SUBSCRIPTION_PLAN_CHANGED]: handleAppstlePlanChanged,
-    [APPSTLE_EVENTS.SUBSCRIPTION_ORDER_SKIPPED]: handleAppstleSkipped,
-    [APPSTLE_EVENTS.SUBSCRIPTION_CONTRACT_RENEWED]: handleAppstleContractRenewed,
-    [APPSTLE_EVENTS.SUBSCRIPTION_PRODUCT_SWAPPED]: handleAppstleProductSwapped,
-    [APPSTLE_EVENTS.BILLING_ATTEMPT_SUCCEEDED]: handleBillingSuccess,
-    [APPSTLE_EVENTS.BILLING_ATTEMPT_FAILED]: handleBillingFailed,
+    [SEAL_EVENTS.SUBSCRIPTION_CREATED]: handleSealSubCreated,
+    [SEAL_EVENTS.SUBSCRIPTION_UPDATED]: handleSealSubUpdated,
+    [SEAL_EVENTS.SUBSCRIPTION_CANCELLED]: handleSealCancelled,
+    [SEAL_EVENTS.SUBSCRIPTION_PAUSED]: handleSealPaused,
+    [SEAL_EVENTS.SUBSCRIPTION_ACTIVATED]: handleSealActivated,
+    [SEAL_EVENTS.SUBSCRIPTION_PLAN_CHANGED]: handleSealPlanChanged,
+    [SEAL_EVENTS.SUBSCRIPTION_ORDER_SKIPPED]: handleSealSkipped,
+    [SEAL_EVENTS.SUBSCRIPTION_CONTRACT_RENEWED]: handleSealContractRenewed,
+    [SEAL_EVENTS.SUBSCRIPTION_PRODUCT_SWAPPED]: handleSealProductSwapped,
+    [SEAL_EVENTS.BILLING_ATTEMPT_SUCCEEDED]: handleBillingSuccess,
+    [SEAL_EVENTS.BILLING_ATTEMPT_FAILED]: handleBillingFailed,
   };
 
   const handler = handlers[eventType];
   if (!handler) {
-    logger.warn(MODULE, `No handler for Appstle event: ${eventType}`);
+    logger.warn(MODULE, `No handler for Seal event: ${eventType}`);
     return { handled: false, action: "ignored", result: { eventType } };
   }
 
@@ -70,7 +70,7 @@ export async function routeAppstleEvent(eventType, payload) {
 /**
  * subscription/created — new signup. Create records + trigger FIRST shipment.
  */
-export async function handleAppstleSubCreated(payload) {
+export async function handleSealSubCreated(payload) {
   const { user, customer } = await resolveCustomer(payload);
   await ensureSubscriptionTier(payload);
 
@@ -104,15 +104,15 @@ export async function handleAppstleSubCreated(payload) {
  * subscription/updated — generic status change. Delegates to the specific
  * pause/resume/cancel handler based on the normalized status.
  */
-export async function handleAppstleSubUpdated(payload) {
+export async function handleSealSubUpdated(payload) {
   const status = payload.status;
   switch (status) {
     case "cancelled":
-      return handleAppstleCancelled(payload);
+      return handleSealCancelled(payload);
     case "paused":
-      return handleAppstlePaused(payload);
+      return handleSealPaused(payload);
     case "active":
-      return handleAppstleActivated(payload);
+      return handleSealActivated(payload);
     case "past_due":
       return handleBillingFailed(payload);
     default: {
@@ -127,7 +127,7 @@ export async function handleAppstleSubUpdated(payload) {
 /**
  * subscription/cancelled — fully cancel. Keep collection records intact.
  */
-export async function handleAppstleCancelled(payload) {
+export async function handleSealCancelled(payload) {
   const subscription = await findSubscription(payload);
   if (!subscription) {
     logger.warn(MODULE, "cancel: subscription not found", {
@@ -168,7 +168,7 @@ export async function handleAppstleCancelled(payload) {
 /**
  * subscription/paused — pause. Cancel scheduled shipments, pause clock.
  */
-export async function handleAppstlePaused(payload) {
+export async function handleSealPaused(payload) {
   const subscription = await findSubscription(payload);
   if (!subscription) return { action: "pause_skipped", reason: "subscription_not_found" };
 
@@ -195,11 +195,11 @@ export async function handleAppstlePaused(payload) {
 /**
  * subscription/activated — resume/reactivate. Accrue paused time, trigger next.
  */
-export async function handleAppstleActivated(payload) {
+export async function handleSealActivated(payload) {
   const subscription = await findSubscription(payload);
   if (!subscription) {
     // A brand new activation without a prior record → treat like created.
-    return handleAppstleSubCreated(payload);
+    return handleSealSubCreated(payload);
   }
 
   // Accrue paused days if we were paused.
@@ -242,7 +242,7 @@ export async function handleAppstleActivated(payload) {
 /**
  * subscription/plan_changed — customer swapped tiers. Update collection type.
  */
-export async function handleAppstlePlanChanged(payload) {
+export async function handleSealPlanChanged(payload) {
   const { customer } = await resolveCustomer(payload);
   const subscription = await syncSubscription({ customer, payload });
   await ensureSubscriptionTier(payload);
@@ -256,8 +256,8 @@ export async function handleAppstlePlanChanged(payload) {
           customerId: customer.id,
           previousType: customer.collectionType,
           newType: newType,
-          reason: "appstle_plan_changed",
-          changedBy: "appstle",
+          reason: "seal_plan_changed",
+          changedBy: "seal",
         },
       })
       .catch((e) => logger.warn(MODULE, `collectionTypeChange log failed: ${e.message}`));
@@ -278,7 +278,7 @@ export async function handleAppstlePlanChanged(payload) {
 /**
  * subscription/order_skipped — customer skipped an upcoming order.
  */
-export async function handleAppstleSkipped(payload) {
+export async function handleSealSkipped(payload) {
   const subscription = await findSubscription(payload);
   if (!subscription) return { action: "skip_skipped", reason: "subscription_not_found" };
 
@@ -312,7 +312,7 @@ export async function handleAppstleSkipped(payload) {
 /**
  * subscription/contract_renewed — log renewal, ensure active.
  */
-export async function handleAppstleContractRenewed(payload) {
+export async function handleSealContractRenewed(payload) {
   const { customer } = await resolveCustomer(payload);
   const subscription = await syncSubscription({ customer, payload });
   return { action: "contract_renewed", subscriptionId: subscription.id };
@@ -321,7 +321,7 @@ export async function handleAppstleContractRenewed(payload) {
 /**
  * subscription/product_swapped — queue an admin review (no self-service swaps).
  */
-export async function handleAppstleProductSwapped(payload) {
+export async function handleSealProductSwapped(payload) {
   const subscription = await findSubscription(payload);
   const customer = subscription
     ? await prisma.customer.findUnique({ where: { id: subscription.customerId } })
@@ -332,7 +332,7 @@ export async function handleAppstleProductSwapped(payload) {
       data: {
         customerId: customer.id,
         reason: "product_swap_requested",
-        details: `Customer requested a product swap via Appstle. Line items: ${JSON.stringify(
+        details: `Customer requested a product swap via Seal. Line items: ${JSON.stringify(
           payload.lineItems || []
         )}`,
         status: "pending",
@@ -399,7 +399,7 @@ export async function handleBillingSuccess(payload) {
 }
 
 /**
- * billing_attempt/failed — all Appstle retries exhausted. Mark past_due,
+ * billing_attempt/failed — all Seal retries exhausted. Mark past_due,
  * alert admin, do NOT run assignment.
  */
 export async function handleBillingFailed(payload) {
@@ -431,9 +431,9 @@ export async function handleBillingFailed(payload) {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Find a subscription by Appstle contract id, Shopify contract id, or the
+ * Find a subscription by Seal contract id, Shopify contract id, or the
  * resolved customer's subscription.
- * @param {import('./appstle-types.js').NormalizedAppstlePayload} payload
+ * @param {import('./seal-types.js').NormalizedSealPayload} payload
  * @returns {Promise<Object|null>}
  */
 async function findSubscription(payload) {

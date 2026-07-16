@@ -39,19 +39,32 @@ export const SHOPIFY_CONFIG = {
   scopes: (process.env.SCOPES || "").split(",").filter(Boolean),
 };
 
-// ─── APPSTLE (SUBSCRIPTION BILLING) ──────────────────────────
+// ─── SEAL SUBSCRIPTIONS (SUBSCRIPTION BILLING) ───────────────
+//
+// Seal Subscriptions Merchant API + webhooks.
+//   - Auth:     "X-Seal-Token" header carries the shop API token.
+//   - Webhooks: signed with HMAC-SHA256(base64) of the raw body using the
+//               shop's API secret; delivered in the "X-Seal-Hmac-Sha256"
+//               header. The webhook topic arrives in "X-Seal-Topic"
+//               (e.g. "subscription/created", "subscription/updated").
+// Docs: https://www.sealsubscriptions.com/articles/merchant-api-documentation
 
-export const APPSTLE_CONFIG = {
-  // HMAC secret used to validate inbound Appstle webhook signatures.
-  webhookSecret: process.env.APPSTLE_WEBHOOK_SECRET || "",
-  // API key for any outbound Appstle Admin API calls (optional).
-  apiKey: process.env.APPSTLE_API_KEY || "",
-  // Base URL for outbound Appstle API (defaults to the public Appstle API).
-  apiBaseUrl: process.env.APPSTLE_API_BASE_URL || "https://subscription-admin.appstle.com/api/external/v2",
-  // Header the signature is delivered in (Appstle uses X-Appstle-Hmac-Sha256).
-  signatureHeader: process.env.APPSTLE_SIGNATURE_HEADER || "x-appstle-hmac-sha256",
-  // Signature digest encoding — Appstle sends base64 by default.
-  signatureEncoding: process.env.APPSTLE_SIGNATURE_ENCODING || "base64", // "base64" | "hex"
+export const SEAL_CONFIG = {
+  // Shop API token, sent as the "X-Seal-Token" header on outbound API calls.
+  apiToken: process.env.SEAL_API_TOKEN || "",
+  // Shop API secret — used to verify inbound webhook HMAC signatures AND to
+  // verify HMAC on API responses. This is the shared webhook signing secret.
+  apiSecret: process.env.SEAL_API_SECRET || "",
+  // Base URL for outbound Seal Merchant API calls.
+  apiBaseUrl:
+    process.env.SEAL_API_BASE_URL ||
+    "https://app.sealsubscriptions.com/shopify/merchant/api",
+  // Header the signature is delivered in (Seal uses X-Seal-Hmac-Sha256).
+  signatureHeader: process.env.SEAL_SIGNATURE_HEADER || "x-seal-hmac-sha256",
+  // Header carrying the webhook topic/event name.
+  topicHeader: process.env.SEAL_TOPIC_HEADER || "x-seal-topic",
+  // Signature digest encoding — Seal signs with base64.
+  signatureEncoding: process.env.SEAL_SIGNATURE_ENCODING || "base64", // "base64" | "hex"
 };
 
 // Public base URL of the Cabinet app (used when registering webhook callbacks).
@@ -128,8 +141,10 @@ export function validateEnvironment() {
     if (!SHOPIFY_CONFIG.accessToken) errors.push("SHOPIFY_ACCESS_TOKEN is required in production mode");
     if (!SHOPIFY_CONFIG.webhookSecret) errors.push("SHOPIFY_WEBHOOK_SECRET is required in production mode");
 
-    // Appstle webhook secret is required to validate inbound subscription webhooks
-    if (!APPSTLE_CONFIG.webhookSecret) errors.push("APPSTLE_WEBHOOK_SECRET is required in production mode");
+    // Seal API secret is required to validate inbound subscription webhook HMAC
+    if (!SEAL_CONFIG.apiSecret) errors.push("SEAL_API_SECRET is required in production mode");
+    // Seal API token is required for outbound Merchant API calls
+    if (!SEAL_CONFIG.apiToken) errors.push("SEAL_API_TOKEN is required in production mode");
 
     // Database must be PostgreSQL in production
     if (DATABASE_URL.includes("file:")) {

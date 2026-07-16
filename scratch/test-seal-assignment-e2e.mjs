@@ -1,13 +1,13 @@
 /**
- * End-to-end integration test for the Appstle → assignment engine → draft order flow.
+ * End-to-end integration test for the Seal → assignment engine → draft order flow.
  * Runs against a real Postgres DB (prototype mode → Shopify draft orders are mocked).
  *
  * Usage:
- *   APP_MODE=prototype DATABASE_URL=postgres://... node scratch/test-appstle-assignment-e2e.mjs
+ *   APP_MODE=prototype DATABASE_URL=postgres://... node scratch/test-seal-assignment-e2e.mjs
  */
 import { prisma } from "../app/lib/db.server.js";
-import { parseAppstlePayload } from "../app/integrations/appstle/appstle-payload.server.js";
-import { routeAppstleEvent } from "../app/integrations/appstle/appstle-webhooks.server.js";
+import { parseSealPayload } from "../app/integrations/seal/seal-payload.server.js";
+import { routeSealEvent } from "../app/integrations/seal/seal-webhooks.server.js";
 import {
   getUpcomingAssignments,
   applyManualOverride,
@@ -105,15 +105,15 @@ function rawCreatedPayload() {
 }
 
 async function run() {
-  console.log("\n=== Appstle Assignment E2E ===\n");
+  console.log("\n=== Seal Assignment E2E ===\n");
   await cleanup();
   await seedProducts();
 
   // ── 1. subscription/created → FIRST shipment ────────────────
   console.log("\n[1] subscription/created (first shipment)");
-  const createdPayload = parseAppstlePayload(rawCreatedPayload(), "subscription/created");
+  const createdPayload = parseSealPayload(rawCreatedPayload(), "subscription/created");
   assert(createdPayload.collectionType === "lucite", `payload mapped to collectionType "lucite" (got ${createdPayload.collectionType})`);
-  const createdRes = await routeAppstleEvent("subscription/created", createdPayload);
+  const createdRes = await routeSealEvent("subscription/created", createdPayload);
   assert(createdRes.handled, "subscription/created handled");
   assert(createdRes.result.shipmentId, "first shipment created");
   assert(createdRes.result.assigned && createdRes.result.assigned.startsWith("E2E-LUC-"), `assigned a lucite product (${createdRes.result.assigned})`);
@@ -137,8 +137,8 @@ async function run() {
   // ── 2. billing_attempt/succeeded → RENEWAL shipment ─────────
   console.log("\n[2] billing_attempt/succeeded (renewal shipment)");
   const billRaw = { ...rawCreatedPayload(), amount_charged: 39.0 };
-  const billPayload = parseAppstlePayload(billRaw, "subscription_billing_attempt/success");
-  const billRes = await routeAppstleEvent("billing_attempt/succeeded", billPayload);
+  const billPayload = parseSealPayload(billRaw, "subscription_billing_attempt/success");
+  const billRes = await routeSealEvent("billing_attempt/succeeded", billPayload);
   assert(billRes.handled, "billing success handled");
   assert(billRes.result.isFirstShipment === false, "renewal correctly NOT treated as first shipment");
   assert(billRes.result.assigned && billRes.result.assigned !== createdRes.result.assigned, `renewal assigned a DIFFERENT product (${billRes.result.assigned}) — no duplicate`);

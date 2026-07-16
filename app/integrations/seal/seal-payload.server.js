@@ -1,34 +1,40 @@
 /**
- * Luciteria Collector Cabinet — Appstle Payload Parsing & Verification
+ * Luciteria Collector Cabinet — Seal Subscriptions Payload Parsing & Verification
  *
  * Responsibilities:
- *  - Validate the HMAC-SHA256 signature on inbound Appstle webhooks
- *  - Normalize the (loosely typed) Appstle payload into a stable internal shape
+ *  - Validate the HMAC-SHA256 signature on inbound Seal webhooks
+ *  - Normalize the (loosely typed) Seal payload into a stable internal shape
  *  - Derive the canonical event type + idempotency key
  *
+ * Seal signs the raw request body with HMAC-SHA256 (base64) using the shop's
+ * API secret, and sends it in the "X-Seal-Hmac-Sha256" header. The topic
+ * arrives in "X-Seal-Topic".
+ *   base64(HMAC_SHA256(rawBody, SEAL_API_SECRET))
+ *
+ * Docs: https://www.sealsubscriptions.com/articles/merchant-api-documentation
  * See docs/SUBSCRIPTION_ARCHITECTURE.md §9.1 (verification) and §9.3 (idempotency).
  */
 
 import crypto from "crypto";
-import { APPSTLE_CONFIG, IS_PROTOTYPE } from "../../config/environment.server.js";
+import { SEAL_CONFIG, IS_PROTOTYPE } from "../../config/environment.server.js";
 import { logger } from "../../lib/error-handling.server.js";
-import { APPSTLE_EVENTS, APPSTLE_STATUS_MAP } from "./appstle-types.js";
+import { SEAL_EVENTS, SEAL_STATUS_MAP } from "./seal-types.js";
 import { mapSellingPlanToCollectionType } from "../../config/subscription-tiers.server.js";
 
-const MODULE = "appstle-payload";
+const MODULE = "seal-payload";
 
 /**
- * Validate an Appstle webhook HMAC signature.
+ * Validate a Seal Subscriptions webhook HMAC signature.
  *
- * Appstle signs the raw request body with HMAC-SHA256 using the shared
- * webhook secret configured in the Appstle dashboard. The digest encoding
- * (base64 vs hex) is configurable via APPSTLE_SIGNATURE_ENCODING.
+ * Seal signs the raw request body with HMAC-SHA256 using the shop's API
+ * secret and delivers the base64 digest in the "X-Seal-Hmac-Sha256" header:
+ *   base64(HMAC_SHA256(rawBody, SEAL_API_SECRET))
  *
  * @param {string} rawBody - The exact raw request body string
- * @param {string} signatureHeader - Value of the Appstle signature header
+ * @param {string} signatureHeader - Value of the X-Seal-Hmac-Sha256 header
  * @returns {boolean} true if valid
  */
-export function validateAppstleWebhook(rawBody, signatureHeader) {
+export function validateSealWebhook(rawBody, signatureHeader) {
   // In prototype mode we accept everything so local testing works without a secret.
   if (IS_PROTOTYPE) {
     if (!signatureHeader) {
@@ -37,17 +43,17 @@ export function validateAppstleWebhook(rawBody, signatureHeader) {
     return true;
   }
 
-  const secret = APPSTLE_CONFIG.webhookSecret;
+  const secret = SEAL_CONFIG.apiSecret;
   if (!secret) {
-    logger.error(MODULE, "APPSTLE_WEBHOOK_SECRET not configured — rejecting webhook");
+    logger.error(MODULE, "SEAL_API_SECRET not configured — rejecting webhook");
     return false;
   }
   if (!signatureHeader) {
-    logger.warn(MODULE, "Missing Appstle signature header — rejecting webhook");
+    logger.warn(MODULE, "Missing Seal signature header — rejecting webhook");
     return false;
   }
 
-  const encoding = APPSTLE_CONFIG.signatureEncoding === "hex" ? "hex" : "base64";
+  const encoding = SEAL_CONFIG.signatureEncoding === "hex" ? "hex" : "base64";
   const hmac = crypto.createHmac("sha256", secret);
   hmac.update(rawBody, "utf8");
   const computed = hmac.digest(encoding);
@@ -64,40 +70,50 @@ export function validateAppstleWebhook(rawBody, signatureHeader) {
 }
 
 /**
- * Determine the canonical event type from a raw Appstle payload.
- * Appstle delivers the event in different places depending on config
- * (top-level `event`, `topic`, `eventType`, or an X-Appstle-Topic header).
+ * Determine the canonical event type from a raw Seal payload.
+ * Seal delivers the topic primarily via the "X-Seal-Topic" header, but a
+ * `topic`/`event` field may also appear in the body depending on config.
  *
  * @param {Object} raw - Parsed JSON payload
- * @param {string} [topicHeader] - Optional topic header value
+ * @param {string} [topicHeader] - Optional X-Seal-Topic header value
  * @returns {string} normalized event type
  */
 export function resolveEventType(raw = {}, topicHeader = "") {
   const candidate = (
+    topicHeader ||
+    raw.topic ||
     raw.event ||
     raw.eventType ||
-    raw.topic ||
     raw.type ||
-    topicHeader ||
     ""
   ).toString().trim();
 
   const normalized = candidate.toLowerCase().replace(/\./g, "/").replace(/_/g, "_");
 
-  // Map a few known aliases to our canonical set.
+  // Map a few known aliases to our canonical set. Seal sends fewer distinct
+  // topics than Appstle did (most lifecycle changes ride on
+  // "subscription/updated"), so the status-based refinement in the handler
+  // layer does the rest.
   const aliases = {
-    "subscription_billing_attempt/succeeded": APPSTLE_EVENTS.BILLING_ATTEMPT_SUCCEEDED,
-    "subscription_billing_attempt/failed": APPSTLE_EVENTS.BILLING_ATTEMPT_FAILED,
-    "billing_attempt/success": APPSTLE_EVENTS.BILLING_ATTEMPT_SUCCEEDED,
-    "billing/succeeded": APPSTLE_EVENTS.BILLING_ATTEMPT_SUCCEEDED,
-    "billing/failed": APPSTLE_EVENTS.BILLING_ATTEMPT_FAILED,
-    "subscription/create": APPSTLE_EVENTS.SUBSCRIPTION_CREATED,
-    "subscription/cancel": APPSTLE_EVENTS.SUBSCRIPTION_CANCELLED,
-    "subscription/canceled": APPSTLE_EVENTS.SUBSCRIPTION_CANCELLED,
-    "subscription/pause": APPSTLE_EVENTS.SUBSCRIPTION_PAUSED,
-    "subscription/activate": APPSTLE_EVENTS.SUBSCRIPTION_ACTIVATED,
-    "subscription/resumed": APPSTLE_EVENTS.SUBSCRIPTION_ACTIVATED,
-    "subscription/resume": APPSTLE_EVENTS.SUBSCRIPTION_ACTIVATED,
+    "subscription/create": SEAL_EVENTS.SUBSCRIPTION_CREATED,
+    "subscription/cancel": SEAL_EVENTS.SUBSCRIPTION_CANCELLED,
+    "subscription/canceled": SEAL_EVENTS.SUBSCRIPTION_CANCELLED,
+    "subscription/pause": SEAL_EVENTS.SUBSCRIPTION_PAUSED,
+    "subscription/activate": SEAL_EVENTS.SUBSCRIPTION_ACTIVATED,
+    "subscription/resumed": SEAL_EVENTS.SUBSCRIPTION_ACTIVATED,
+    "subscription/resume": SEAL_EVENTS.SUBSCRIPTION_ACTIVATED,
+    "subscription/reactivated": SEAL_EVENTS.SUBSCRIPTION_ACTIVATED,
+    // Billing notifications (Seal + Shopify billing-attempt style names).
+    "billing_attempt/success": SEAL_EVENTS.BILLING_ATTEMPT_SUCCEEDED,
+    "billing_attempt/succeeded": SEAL_EVENTS.BILLING_ATTEMPT_SUCCEEDED,
+    "billing_attempt/failure": SEAL_EVENTS.BILLING_ATTEMPT_FAILED,
+    "billing_attempt/failed": SEAL_EVENTS.BILLING_ATTEMPT_FAILED,
+    "billing/succeeded": SEAL_EVENTS.BILLING_ATTEMPT_SUCCEEDED,
+    "billing/success": SEAL_EVENTS.BILLING_ATTEMPT_SUCCEEDED,
+    "billing/failed": SEAL_EVENTS.BILLING_ATTEMPT_FAILED,
+    "billing/failure": SEAL_EVENTS.BILLING_ATTEMPT_FAILED,
+    "order/created": SEAL_EVENTS.BILLING_ATTEMPT_SUCCEEDED,
+    "order/create": SEAL_EVENTS.BILLING_ATTEMPT_SUCCEEDED,
   };
 
   if (aliases[normalized]) return aliases[normalized];
@@ -108,14 +124,14 @@ export function resolveEventType(raw = {}, topicHeader = "") {
 }
 
 /**
- * Normalize an Appstle status string to a Cabinet Subscription.status value.
+ * Normalize a Seal status string to a Cabinet Subscription.status value.
  * @param {string} rawStatus
  * @returns {string|null}
  */
 export function normalizeStatus(rawStatus) {
   if (!rawStatus) return null;
   const key = rawStatus.toString().trim().toUpperCase();
-  return APPSTLE_STATUS_MAP[key] || rawStatus.toString().toLowerCase();
+  return SEAL_STATUS_MAP[key] || rawStatus.toString().toLowerCase();
 }
 
 /** Safely coerce a value to a Date, or return null. */
@@ -150,22 +166,27 @@ function pick(obj, keys) {
 }
 
 /**
- * Normalize a raw Appstle webhook payload into {@link NormalizedAppstlePayload}.
+ * Normalize a raw Seal webhook payload into {@link NormalizedSealPayload}.
  * Tolerant of camelCase / snake_case and nested `customer` / `subscription`
- * objects that different Appstle payload versions use.
+ * containers that different Seal payload versions use. Seal wraps the
+ * subscription under a top-level `payload` key on some topics, so we unwrap
+ * that first.
  *
  * @param {Object} raw - Parsed JSON payload
  * @param {string} [topicHeader]
- * @returns {import('./appstle-types.js').NormalizedAppstlePayload}
+ * @returns {import('./seal-types.js').NormalizedSealPayload}
  */
-export function parseAppstlePayload(raw = {}, topicHeader = "") {
+export function parseSealPayload(raw = {}, topicHeader = "") {
   const event = resolveEventType(raw, topicHeader);
 
-  // Common nested containers across Appstle payload shapes.
-  const sub = raw.subscription || raw.subscriptionContract || raw.contract || {};
-  const cust = raw.customer || sub.customer || {};
+  // Seal often nests the subscription under `payload` (API + some webhooks).
+  const root = raw.payload && typeof raw.payload === "object" ? raw.payload : raw;
 
-  const customerEmailRaw = pick({ ...raw, ...sub, ...cust }, [
+  // Common nested containers across Seal payload shapes.
+  const sub = root.subscription || root.subscriptionContract || root.contract || root;
+  const cust = root.customer || sub.customer || {};
+
+  const customerEmailRaw = pick({ ...root, ...sub, ...cust }, [
     "customer_email",
     "customerEmail",
     "email",
@@ -174,11 +195,11 @@ export function parseAppstlePayload(raw = {}, topicHeader = "") {
     ? customerEmailRaw.toString().toLowerCase().trim()
     : undefined;
 
-  const rawStatus = pick({ ...raw, ...sub }, ["status", "subscriptionStatus", "state"]);
+  const rawStatus = pick({ ...root, ...sub }, ["status", "subscriptionStatus", "state"]);
 
   // Line items may appear as line_items / lineItems / items.
   const rawLineItems =
-    raw.line_items || raw.lineItems || sub.line_items || sub.lineItems || sub.items || [];
+    root.line_items || root.lineItems || sub.line_items || sub.lineItems || sub.items || [];
   const lineItems = Array.isArray(rawLineItems)
     ? rawLineItems.map((li) => ({
         variantId: numericId(pick(li, ["variant_id", "variantId", "shopify_variant_id"])),
@@ -191,69 +212,80 @@ export function parseAppstlePayload(raw = {}, topicHeader = "") {
     : [];
 
   const metadata =
-    raw.metadata || sub.metadata || raw.meta || raw.properties || {};
+    root.metadata || sub.metadata || root.meta || root.properties || {};
 
   const parsed = {
     event,
     raw,
 
+    // Seal identifies a subscription by numeric `id` (and a public `token`).
     subscriptionContractId: (
-      pick({ ...raw, ...sub }, [
-        "subscription_contract_id",
-        "subscriptionContractId",
-        "contract_id",
-        "contractId",
+      pick({ ...root, ...sub }, [
+        "subscription_id",
+        "subscriptionId",
+        "seal_subscription_id",
         "id",
+        "token",
       ]) ?? undefined
     )?.toString(),
 
-    shopifyContractId: pick({ ...raw, ...sub }, [
+    shopifyContractId: pick({ ...root, ...sub }, [
       "shopify_subscription_contract_id",
       "shopifySubscriptionContractId",
       "shopify_contract_id",
+      "subscription_contract_id",
       "admin_graphql_api_id",
     ]),
 
     customerEmail,
-    customerFirstName: pick({ ...raw, ...cust }, [
+    customerFirstName: pick({ ...root, ...cust }, [
       "customer_first_name",
       "customerFirstName",
       "first_name",
       "firstName",
     ]),
-    customerLastName: pick({ ...raw, ...cust }, [
+    customerLastName: pick({ ...root, ...cust }, [
       "customer_last_name",
       "customerLastName",
       "last_name",
       "lastName",
     ]),
     shopifyCustomerId: numericId(
-      pick({ ...raw, ...cust }, ["shopify_customer_id", "shopifyCustomerId", "customer_id"])
+      pick({ ...root, ...cust }, ["shopify_customer_id", "shopifyCustomerId", "customer_id"])
     ),
-    appstleCustomerId: (
-      pick({ ...raw, ...cust }, ["appstle_customer_id", "appstleCustomerId"]) ?? undefined
+    sealCustomerId: (
+      pick({ ...root, ...cust }, ["seal_customer_id", "sealCustomerId"]) ?? undefined
     )?.toString(),
 
     status: normalizeStatus(rawStatus),
     rawStatus: rawStatus ? rawStatus.toString() : undefined,
 
-    sellingPlanId: pick({ ...raw, ...sub }, [
+    sellingPlanId: pick({ ...root, ...sub }, [
       "selling_plan_id",
       "sellingPlanId",
+      "subscription_rule_id",
+      "rule_id",
     ]),
-    sellingPlanName: pick({ ...raw, ...sub }, [
+    sellingPlanName: pick({ ...root, ...sub }, [
       "selling_plan_name",
       "sellingPlanName",
+      "subscription_rule_name",
+      "rule_name",
     ]),
-    sellingPlanGroupName: pick({ ...raw, ...sub }, [
+    sellingPlanGroupName: pick({ ...root, ...sub }, [
       "selling_plan_group_name",
       "sellingPlanGroupName",
     ]),
 
-    billingInterval: pick({ ...raw, ...sub }, ["billing_interval", "billingInterval", "interval"]),
+    billingInterval: pick({ ...root, ...sub }, [
+      "billing_interval",
+      "billingInterval",
+      "interval",
+      "billing_interval_unit",
+    ]),
     billingIntervalCount:
       parseInt(
-        pick({ ...raw, ...sub }, [
+        pick({ ...root, ...sub }, [
           "billing_interval_count",
           "billingIntervalCount",
           "intervalCount",
@@ -261,24 +293,24 @@ export function parseAppstlePayload(raw = {}, topicHeader = "") {
         10
       ) || 1,
 
-    price: toFloat(pick({ ...raw, ...sub }, ["price", "recurring_price", "amount"])),
+    price: toFloat(pick({ ...root, ...sub }, ["price", "recurring_price", "amount", "total"])),
     amountCharged: toFloat(
-      pick(raw, ["amount_charged", "amountCharged", "total", "total_price"])
+      pick(root, ["amount_charged", "amountCharged", "total", "total_price"])
     ),
-    currency: pick({ ...raw, ...sub }, ["currency", "currency_code"]) || "USD",
+    currency: pick({ ...root, ...sub }, ["currency", "currency_code"]) || "USD",
 
     billingAttemptId: (
-      pick(raw, ["billing_attempt_id", "billingAttemptId"]) ?? undefined
+      pick(root, ["billing_attempt_id", "billingAttemptId", "billing_id"]) ?? undefined
     )?.toString(),
-    orderId: pick(raw, ["order_id", "orderId"]),
-    orderNumber: pick(raw, ["order_number", "orderName", "name"]),
+    orderId: pick(root, ["order_id", "orderId", "shopify_order_id"]),
+    orderNumber: pick(root, ["order_number", "orderName", "name"]),
 
-    billingDate: toDate(pick(raw, ["billing_date", "billingDate"])),
+    billingDate: toDate(pick(root, ["billing_date", "billingDate", "charged_at"])),
     nextBillingDate: toDate(
-      pick({ ...raw, ...sub }, ["next_billing_date", "nextBillingDate", "next_charge_date"])
+      pick({ ...root, ...sub }, ["next_billing_date", "nextBillingDate", "next_charge_date"])
     ),
-    createdAt: toDate(pick({ ...raw, ...sub }, ["created_at", "createdAt"])),
-    updatedAt: toDate(pick({ ...raw, ...sub }, ["updated_at", "updatedAt"])),
+    createdAt: toDate(pick({ ...root, ...sub }, ["created_at", "createdAt"])),
+    updatedAt: toDate(pick({ ...root, ...sub }, ["updated_at", "updatedAt"])),
 
     lineItems,
     metadata,
@@ -295,7 +327,7 @@ export function parseAppstlePayload(raw = {}, topicHeader = "") {
  * Same event delivered twice → same key → deduped.
  *
  * @param {string} eventType
- * @param {import('./appstle-types.js').NormalizedAppstlePayload} payload
+ * @param {import('./seal-types.js').NormalizedSealPayload} payload
  * @returns {string}
  */
 export function generateIdempotencyKey(eventType, payload) {

@@ -143,7 +143,7 @@ export async function action({ request }) {
       ]);
 
       const { createSubscriptionDraftOrder } = await import(
-        "../integrations/appstle/appstle-draft-orders.server.js"
+        "../integrations/seal/seal-draft-orders.server.js"
       );
       const draftOrder = await createSubscriptionDraftOrder({
         customer,

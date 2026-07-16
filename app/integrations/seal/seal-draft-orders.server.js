@@ -13,7 +13,7 @@ import { prisma } from "../../lib/db.server.js";
 import { logger } from "../../lib/error-handling.server.js";
 import { IS_PROTOTYPE } from "../../config/environment.server.js";
 
-const MODULE = "appstle-draft-orders";
+const MODULE = "seal-draft-orders";
 
 /** Extract the numeric id from a Shopify GID or return the value as-is. */
 function numericId(value) {

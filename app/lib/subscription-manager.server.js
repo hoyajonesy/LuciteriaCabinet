@@ -8,7 +8,7 @@
  *   4. Auto-approve → create Shopify draft order, OR route to the admin exception queue
  *   5. Refresh the AssignmentPreview sequence
  *
- * This is the bridge between the Appstle webhook handlers and the existing
+ * This is the bridge between the Seal webhook handlers and the existing
  * assignment-engine / Shopify integrations.
  *
  * See docs/SUBSCRIPTION_ARCHITECTURE.md §5.1 (handleBillingSuccess) & §8 (first shipment).
@@ -21,7 +21,7 @@ import {
   previewSequence,
   STRATEGIES,
 } from "./assignment-engine.server.js";
-import { createSubscriptionDraftOrder } from "../integrations/appstle/appstle-draft-orders.server.js";
+import { createSubscriptionDraftOrder } from "../integrations/seal/seal-draft-orders.server.js";
 import { getTierByCollectionType } from "./subscription-tiers-db.server.js";
 
 const MODULE = "subscription-manager";
