@@ -91,6 +91,10 @@
 /* Brand icon only shows when the sidebar is collapsed (mobile) */
 .brand-icon { display: none; }
 
+/* Nav badge: full numeric pill on expanded (tablet/desktop) sidebar.
+   The dot variant is hidden until the sidebar collapses (see media query). */
+.nav-badge-dot { display: none; }
+
 /* Responsive sidebar collapse */
 @media (max-width: 768px) {
   .luc-sidebar {
@@ -103,4 +107,24 @@
     display: none !important;
   }
   .luc-sidebar .brand-icon { display: block !important; }
+
+  /* Collapsed sidebar is only 60px wide with overflow:hidden, so the full
+     numeric badge gets clipped. Swap it for a compact dot that sits on the
+     top-right of the nav icon and stays fully inside the 60px rail. */
+  .luc-sidebar .nav-badge-full { display: none !important; }
+  .luc-sidebar .nav-badge-dot {
+    display: block !important;
+    position: absolute;
+    top: 7px;
+    right: 16px;
+    width: 9px;
+    height: 9px;
+    border-radius: 9999px;
+    background: #ef4444; /* alert (unread notifications) */
+    box-shadow: 0 0 0 2px #fff; /* white ring so it reads against the icon */
+    pointer-events: none;
+  }
+  .luc-sidebar .nav-badge-dot--info {
+    background: var(--luc-blue); /* informational count (e.g. active tiers) */
+  }
 }

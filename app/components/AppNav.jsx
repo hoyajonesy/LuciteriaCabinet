@@ -42,9 +42,9 @@ export default function AppNav({
   const activePath = currentPath || location.pathname;
 
   const linkBase =
-    "flex items-center gap-3 px-5 py-2.5 text-luc-text hover:bg-luc-gray transition-colors";
+    "relative flex items-center gap-3 px-5 py-2.5 text-luc-text hover:bg-luc-gray transition-colors";
   const linkActive =
-    "flex items-center gap-3 px-5 py-2.5 bg-luc-bluegray text-luc-blue font-medium border-l-2 border-luc-blue";
+    "relative flex items-center gap-3 px-5 py-2.5 bg-luc-bluegray text-luc-blue font-medium border-l-2 border-luc-blue";
 
   return (
     <aside className="luc-sidebar w-56 flex-shrink-0 bg-white border-r border-luc-border flex flex-col min-h-screen">
@@ -66,14 +66,30 @@ export default function AppNav({
               <i className={`fa-solid ${item.icon} w-4`}></i>
               <span className="link-label">{item.label}</span>
               {item.badgeKey === "unread" && unreadCount > 0 && (
-                <span className="ml-auto text-xs bg-gray-300 text-gray-700 rounded-full px-2">
-                  {unreadCount > 9 ? "9+" : unreadCount}
-                </span>
+                <>
+                  {/* Expanded sidebar (tablet/desktop): full numeric badge */}
+                  <span className="nav-badge-full ml-auto text-xs bg-gray-300 text-gray-700 rounded-full px-2">
+                    {unreadCount > 9 ? "9+" : unreadCount}
+                  </span>
+                  {/* Collapsed sidebar (mobile, 60px): simple dot indicator */}
+                  <span
+                    className="nav-badge-dot nav-badge-dot--alert"
+                    role="status"
+                    aria-label={`${unreadCount} unread notifications`}
+                  />
+                </>
               )}
               {item.badgeKey && item.badgeKey !== "unread" && badgeCounts[item.badgeKey] > 0 && (
-                <span className="ml-auto text-xs bg-luc-bluegray text-luc-blue rounded-full px-2">
-                  {badgeCounts[item.badgeKey]}
-                </span>
+                <>
+                  <span className="nav-badge-full ml-auto text-xs bg-luc-bluegray text-luc-blue rounded-full px-2">
+                    {badgeCounts[item.badgeKey]}
+                  </span>
+                  <span
+                    className="nav-badge-dot nav-badge-dot--info"
+                    role="status"
+                    aria-label={`${badgeCounts[item.badgeKey]} items`}
+                  />
+                </>
               )}
             </>
           );

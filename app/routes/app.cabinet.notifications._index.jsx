@@ -118,25 +118,25 @@ export default function NotificationCenter() {
     <div className="flex min-h-screen bg-gray-100">
       <AppNav mode="customer" customerName={firstName} currentPath="/app/cabinet/notifications" unreadCount={unreadCount} />
       <main className="luc-main flex-1">
-        <div className="min-h-[900px] max-w-[1100px] mx-auto px-8 py-8">
+        <div className="min-h-[900px] max-w-[1100px] mx-auto px-4 sm:px-8 py-8">
           {/* Header */}
-          <div className="flex items-center justify-between mb-6">
-            <div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
+            <div className="min-w-0">
               <h1 className="text-xl font-semibold text-gray-800">Notifications</h1>
               <p className="text-sm text-gray-500">Your collection activity, in one place.</p>
             </div>
             <button
               type="button"
               onClick={() => fetcher.submit({ intent: "read-all" }, { method: "post" })}
-              className="text-sm border border-gray-300 bg-white rounded px-3 py-2 text-gray-600 hover:bg-gray-50"
+              className="self-start sm:self-auto flex-shrink-0 whitespace-nowrap text-sm border border-gray-300 bg-white rounded px-3 py-2 text-gray-600 hover:bg-gray-50"
             >
               <i className="fa-regular fa-circle-check mr-1" /> Mark all as read
             </button>
           </div>
 
-          <div className="flex gap-6">
+          <div className="flex flex-col md:flex-row gap-6">
             {/* Filter sidebar */}
-            <aside className="w-52 flex-shrink-0">
+            <aside className="w-full md:w-52 flex-shrink-0">
               <nav className="bg-white border border-gray-300 rounded text-sm overflow-hidden">
                 {FILTERS.map((f, i) => {
                   const active = filter === f.id;
