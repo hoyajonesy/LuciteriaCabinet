@@ -31,7 +31,9 @@ export const action = async ({ request }) => {
     return json({ error: result.error }, { status: 400 });
   }
 
-  return redirect("/onboarding/welcome?reset=success");
+  // Password reset users have already completed onboarding — send them to the
+  // LOGIN screen (not the signup/onboarding flow) with a success flag.
+  return redirect("/onboarding/welcome?mode=login&resetSuccess=true");
 };
 
 export default function ResetPassword() {

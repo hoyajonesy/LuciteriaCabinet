@@ -15,9 +15,8 @@ import { bulkSetOwned } from "../lib/collection.server";
 import { checkMilestones } from "../lib/milestones.server";
 import { notifyMilestone } from "../lib/notifications-db.server";
 import { ELEMENTS_118 } from "../data/elements.server";
-import { FORMAT_LIST, parseSizes } from "../lib/formats";
+import { FORMAT_LIST } from "../lib/formats";
 import WireframePeriodicTable from "../components/WireframePeriodicTable";
-import { elementForDisplayFormat } from "../lib/format-display";
 
 export const loader = async ({ request }) => {
   const userId = await getUserId(request);
@@ -78,19 +77,16 @@ export default function LogOwnedStep() {
   const [selectedFormat, setSelectedFormat] = useState("");
   const [showTooltip, setShowTooltip] = useState(false);
 
-  // Keep the table layout stable, but only exact periodic_size matches are selectable.
+  // Show the FULL periodic table (all 118 elements). We intentionally do NOT
+  // filter by what Luciteria sells in the chosen format — collectors may own
+  // specimens bought elsewhere or previously acquired. Once a format is
+  // selected every element becomes selectable; before that, nothing is.
   const visibleElements = useMemo(() => {
-    return elements
-      .map((el) => {
-        if (selectedFormat === "") {
-          return {
-            ...el,
-            available: false,
-          };
-        }
-        return elementForDisplayFormat(el, selectedFormat);
-      })
-      .filter(Boolean);
+    return elements.map((el) => ({
+      ...el,
+      elementName: el.elementName || el.name,
+      available: selectedFormat !== "",
+    }));
   }, [elements, selectedFormat]);
 
   const toggle = (el) => {

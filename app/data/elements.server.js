@@ -270,7 +270,48 @@ async function fetchElements118() {
     .sort((a, b) => a.z - b.z);
 }
 
-const ELEMENTS_118 = await fetchElements118();
+// Minimal group/phase metadata for elements that Shopify may not return
+// (so backfilled placeholders still color/label correctly).
+const BACKFILL_META = {
+  Rn: { group: "Noble Gas", phase: "gas" },
+};
+
+/**
+ * Ensure every element of the canonical periodic table is present.
+ *
+ * ELEMENTS_118 is built from live Shopify products, so any element Luciteria
+ * does not sell (e.g. Radon — a radioactive noble gas) would otherwise be
+ * missing from every periodic-table view. We backfill those gaps with
+ * placeholder entries that carry NO products (so they can't be purchased and
+ * are excluded from format-specific/shop views), but DO render on the full
+ * periodic table and remain selectable — letting collectors log specimens
+ * they own from other sources.
+ */
+function backfillCanonicalElements(fetched) {
+  const byZ = new Map(fetched.map((e) => [e.z, e]));
+  for (const c of CANONICAL_ELEMENTS) {
+    if (byZ.has(c.z)) continue;
+    const meta = BACKFILL_META[c.sym] || {};
+    byZ.set(c.z, {
+      z: c.z,
+      sym: c.sym,
+      name: c.name,
+      elementName: c.name,
+      group: meta.group || "",
+      phase: meta.phase || "",
+      row: c.row,
+      col: c.col,
+      // No Shopify sizes/products → filtered out of shop & format views,
+      // but present on the full periodic table.
+      size: "[]",
+      productsByFormat: {},
+      products: [],
+    });
+  }
+  return Array.from(byZ.values()).sort((a, b) => a.z - b.z);
+}
+
+const ELEMENTS_118 = backfillCanonicalElements(await fetchElements118());
 
 
 

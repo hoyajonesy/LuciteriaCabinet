@@ -79,17 +79,22 @@ export default function OnboardingWelcome() {
   const isSubmitting = navigation.state === "submitting";
   const [searchParams] = useSearchParams();
   const queryMode = searchParams.get("mode");
+  // Show a confirmation after a successful password reset. Accept both the
+  // current flag (?resetSuccess=true) and the legacy one (?reset=success).
+  const resetSuccess =
+    searchParams.get("resetSuccess") === "true" || searchParams.get("reset") === "success";
 
   const [mode, setMode] = useState(() => {
     if (actionData?.intent) return actionData.intent;
+    if (resetSuccess) return "login";
     return queryMode === "login" ? "login" : "signup";
   });
 
   useEffect(() => {
-    if (!actionData?.intent && queryMode) {
-      setMode(queryMode === "login" ? "login" : "signup");
+    if (!actionData?.intent && (queryMode || resetSuccess)) {
+      setMode(queryMode === "login" || resetSuccess ? "login" : "signup");
     }
-  }, [queryMode, actionData]);
+  }, [queryMode, actionData, resetSuccess]);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
@@ -128,6 +133,13 @@ export default function OnboardingWelcome() {
         <p className="mb-8 text-center text-base text-luc-muted">
           {mode === "signup" ? "Let's set up your collection profile." : "Log in to continue your collection."}
         </p>
+
+        {resetSuccess && !actionData?.error && (
+          <div className="mb-5 rounded-btn border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
+            <i className="fa-solid fa-circle-check mr-1 text-green-500" />
+            Password updated successfully, please log in.
+          </div>
+        )}
 
         {actionData?.error && (
           <div className="mb-5 rounded-btn border border-luc-border bg-luc-gray px-3 py-2 text-sm text-luc-text">
