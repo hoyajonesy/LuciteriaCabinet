@@ -30,6 +30,7 @@ const NAV_ITEMS = [
   { label: "Analytics", path: "/admin/analytics",  icon: "📈" },
   { label: "Formats",   path: "/admin/formats",    icon: "🧊" },
   { label: "Subscription Tiers", path: "/admin/subscription-tiers", icon: "🎟️" },
+  { label: "Shop Metafields", path: "/admin/shop-metafields", icon: "🔧" },
   { label: "Sets",      path: "/admin/sets",       icon: "📦" },
   { label: "Notifications", path: "/admin/notifications", icon: "🔔" },
   { label: "Milestones",path: "/admin/milestones", icon: "🏆" },
