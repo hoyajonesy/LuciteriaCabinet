@@ -12,8 +12,14 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // directUrl is used by `prisma migrate deploy` / `prisma db push`.
+  // Neon's pooled endpoint (-pooler) does not support the advisory locks
+  // that migrations require (causes error P1002 / advisory lock timeout).
+  // Point DIRECT_URL at the NON-pooled Neon connection string.
+  // Falls back to DATABASE_URL if DIRECT_URL is not set.
+  directUrl = env("DIRECT_URL")
 }
 
 // ─── User (Authentication & Onboarding) ──────────────────────
