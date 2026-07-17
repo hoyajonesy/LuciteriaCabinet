@@ -6,6 +6,7 @@
   "description": "Shopify embedded app for the Luciteria Collector Cabinet experience",
   "scripts": {
     "build": "remix vite:build",
+    "postinstall": "prisma generate",
     "vercel-build": "prisma generate && remix vite:build",
     "dev": "remix vite:dev",
     "dev:debug": "DEBUG=* remix vite:dev",
