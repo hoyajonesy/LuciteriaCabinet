@@ -1,8 +1,9 @@
 import { json } from "@remix-run/node";
-import { Links, Meta, Outlet, Scripts, ScrollRestoration, useRouteError, isRouteErrorResponse } from "@remix-run/react";
+import { Links, Meta, Outlet, Scripts, ScrollRestoration, useRouteError, isRouteErrorResponse, useLoaderData } from "@remix-run/react";
 import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
 import tailwindStyles from "./tailwind.css?url";
 import { enforceSubdomainRouting } from "./lib/subdomain-guard.server.js";
+import { useGoogleAnalytics } from "./hooks/useGoogleAnalytics.js";
 
 export const loader = async ({ request }) => {
   const subdomain = enforceSubdomainRouting(request); // throws redirect / 404 when needed
@@ -11,6 +12,9 @@ export const loader = async ({ request }) => {
       name: subdomain.subdomain,
       isAdmin: subdomain.isAdmin,
       isApp: subdomain.isApp,
+    },
+    ENV: {
+      GA_MEASUREMENT_ID: process.env.GA_MEASUREMENT_ID || "",
     },
   });
 };
@@ -37,6 +41,9 @@ export const links = () => [
 ];
 
 export default function App() {
+  const { ENV } = useLoaderData();
+  useGoogleAnalytics(ENV.GA_MEASUREMENT_ID);
+
   return (
     <html lang="en">
       <head>
@@ -44,6 +51,26 @@ export default function App() {
         <meta name="viewport" content="width=device-width,initial-scale=1" />
         <Meta />
         <Links />
+        {ENV.GA_MEASUREMENT_ID && (
+          <>
+            <script
+              async
+              src={`https://www.googletagmanager.com/gtag/js?id=${ENV.GA_MEASUREMENT_ID}`}
+            />
+            <script
+              dangerouslySetInnerHTML={{
+                __html: `
+                  window.dataLayer = window.dataLayer || [];
+                  function gtag(){dataLayer.push(arguments);}
+                  gtag('js', new Date());
+                  gtag('config', '${ENV.GA_MEASUREMENT_ID}', {
+                    page_path: window.location.pathname + window.location.search,
+                  });
+                `,
+              }}
+            />
+          </>
+        )}
         <style>{`
           :root {
             /* Shopify "Live Working Theme" palette (consumer-facing) */
