@@ -17,6 +17,7 @@ const LUCITE_VARIANTS = ["Color — Clear", "Color — Smoke", "Color — Blue T
 export default function AddToWishlistModal({
   elements = [],
   formats = [],
+  defaultFormat = "",
   ownedSymbols = [],
   wantedSymbols = [],
   watchlistSymbols = [],
@@ -25,7 +26,11 @@ export default function AddToWishlistModal({
   const fetcher = useFetcher();
   const COMPACT = elements;
   const [selectedSym, setSelectedSym] = useState("Au");
-  const [formFactor, setFormFactor] = useState("10mm_cube");
+  const initialFormat =
+    defaultFormat && formats.some((f) => f.id === defaultFormat)
+      ? defaultFormat
+      : (formats[0] && formats[0].id) || "other";
+  const [formFactor, setFormFactor] = useState(initialFormat);
   const [variant, setVariant] = useState(LUCITE_VARIANTS[0]);
   const [priority, setPriority] = useState(3);
 
@@ -41,28 +46,28 @@ export default function AddToWishlistModal({
     }
   }
 
-  // Auto-select first available format on symbol change
+  // A format is selectable if it is a "personal" format (no shopifyKey / not
+  // purchasable) OR the element is actually sold in that Shopify size.
+  const isFormatAvailable = (f) => {
+    if (!f) return false;
+    if (!f.purchasable || !f.shopifyKey) return true;
+    return availableSizes.includes(f.shopifyKey);
+  };
+  const formatById = (id) => formats.find((f) => f.id === id);
+
+  // Keep the current form factor valid when the selected element changes.
+  // Preserve the user's (defaulted) choice when possible; only switch away if
+  // it isn't available for this element.
   useEffect(() => {
-    if (selected) {
-      let sizes = [];
-      if (selected.size) {
-        try {
-          sizes = JSON.parse(selected.size);
-        } catch {
-          sizes = [];
-        }
-      }
-      if (sizes.length > 0) {
-        if (!sizes.includes(formFactor)) {
-          setFormFactor(sizes[0]);
-        }
-      } else {
-        setFormFactor("other");
-      }
+    const cur = formatById(formFactor);
+    if (!isFormatAvailable(cur)) {
+      const firstAvail = formats.find((f) => isFormatAvailable(f));
+      setFormFactor(firstAvail ? firstAvail.id : "other");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSym]);
 
-  const canSubmit = (availableSizes.includes(formFactor) || formFactor === "other") && !submitting;
+  const canSubmit = isFormatAvailable(formatById(formFactor)) && !submitting;
 
   // Close after a successful add
   useEffect(() => {
@@ -160,10 +165,11 @@ export default function AddToWishlistModal({
               <div className="space-y-2">
                 {formats.map((f) => {
                   const active = formFactor === f.id;
-                  const isAvailable = availableSizes.includes(f.id) || f.id === "other";
-                  
-                  // Get price & stock info if available
-                  const formatVariant = selected.productsByFormat?.[f.id];
+                  const isAvailable = isFormatAvailable(f);
+
+                  // Get price & stock info only for purchasable (Shopify-mapped) formats
+                  const formatVariant =
+                    f.purchasable && f.shopifyKey ? selected.productsByFormat?.[f.shopifyKey] : null;
                   const price = formatVariant?.price;
                   const available = formatVariant?.availableForSale;
                   const qty = formatVariant?.inventoryQty;
@@ -205,7 +211,7 @@ export default function AddToWishlistModal({
                       
                       {isAvailable && formatVariant ? (
                         <div className="flex items-center gap-2">
-                          <span className="font-semibold text-gray-800">${price.toFixed(2)}</span>
+                          <span className="font-semibold text-gray-800">{price != null ? `$${price.toFixed(2)}` : "—"}</span>
                           {stockStatus === "In Stock" && (
                             <span className="text-[10px] font-semibold text-green-600 bg-green-50 px-2 py-0.5 rounded border border-green-200">In Stock</span>
                           )}
@@ -217,7 +223,7 @@ export default function AddToWishlistModal({
                           )}
                         </div>
                       ) : isAvailable ? (
-                        <span className="text-xs text-gray-400">Standard Price</span>
+                        <span className="text-xs text-gray-400">{f.purchasable ? "Standard Price" : "Personal"}</span>
                       ) : (
                         <span className="text-xs font-medium text-gray-400 bg-gray-100 px-2 py-0.5 rounded border border-gray-200">Unavailable</span>
                       )}
@@ -228,7 +234,7 @@ export default function AddToWishlistModal({
             </fieldset>
 
             {/* Conditional variant (lucite only) */}
-            {formFactor === "lucite_cube" && (
+            {formatById(formFactor)?.shopifyKey === "lucite_cube" && (
               <div className="mb-5 border-t border-dashed border-gray-300 pt-4">
                 <label className="text-xs uppercase tracking-wide text-gray-400 mb-2 block">
                   Variant <span className="text-gray-400 normal-case">(if applicable)</span>

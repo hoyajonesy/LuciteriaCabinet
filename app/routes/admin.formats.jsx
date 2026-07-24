@@ -7,11 +7,40 @@ import { useLoaderData, Form, useActionData, useNavigation } from "@remix-run/re
 import { useState, useEffect } from "react";
 import { prisma } from "../lib/db.server.js";
 import { requireAdmin } from "../lib/admin-session.server.js";
+import { FORMAT_LIST } from "../lib/formats.js";
+
+// Shopify size keys an admin can map a format to (makes it purchasable with
+// live price/stock). Sourced from the Shopify format catalog.
+const SHOPIFY_KEY_OPTIONS = FORMAT_LIST.map((f) => ({ value: f.id, label: `${f.name} (${f.id})` }));
+
+// Turn a display name into a stable, url-safe key slug.
+function slugify(str) {
+  return String(str)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+// Guarantee the generated key is unique among existing formats (excluding self).
+async function uniqueKey(base, excludeId) {
+  let candidate = base || "format";
+  let n = 1;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const clash = await prisma.format.findFirst({
+      where: { key: candidate, ...(excludeId ? { NOT: { id: excludeId } } : {}) },
+    });
+    if (!clash) return candidate;
+    n += 1;
+    candidate = `${base}_${n}`;
+  }
+}
 
 export const loader = async ({ request }) => {
   await requireAdmin(request);
   const formats = await prisma.format.findMany({ orderBy: { displayOrder: "asc" } });
-  return json({ formats });
+  return json({ formats, shopifyKeyOptions: SHOPIFY_KEY_OPTIONS });
 };
 
 export const action = async ({ request }) => {
@@ -23,12 +52,15 @@ export const action = async ({ request }) => {
     const name = formData.get("name")?.toString().trim();
     const description = formData.get("description")?.toString().trim() || "";
     const displayOrder = parseInt(formData.get("displayOrder") || "0", 10);
+    const shopifyKey = formData.get("shopifyKey")?.toString().trim() || null;
+    const keyInput = formData.get("key")?.toString().trim();
 
     if (!name) return json({ error: "Name is required." }, { status: 400 });
     const exists = await prisma.format.findUnique({ where: { name } });
     if (exists) return json({ error: "A format with this name already exists." }, { status: 400 });
 
-    await prisma.format.create({ data: { name, description, displayOrder } });
+    const key = await uniqueKey(slugify(keyInput || name));
+    await prisma.format.create({ data: { name, description, displayOrder, key, shopifyKey } });
     return json({ success: true, action: "created" });
   }
 
@@ -38,12 +70,23 @@ export const action = async ({ request }) => {
     const description = formData.get("description")?.toString().trim() || "";
     const displayOrder = parseInt(formData.get("displayOrder") || "0", 10);
     const isActive = formData.get("isActive") === "true";
+    const shopifyKey = formData.get("shopifyKey")?.toString().trim() || null;
+    const keyInput = formData.get("key")?.toString().trim();
 
     if (!name) return json({ error: "Name is required." }, { status: 400 });
 
+    // Preserve the existing key unless the admin explicitly changes it; keep it unique.
+    const current = await prisma.format.findUnique({ where: { id } });
+    let key = current?.key || "";
+    if (keyInput && keyInput !== key) {
+      key = await uniqueKey(slugify(keyInput), id);
+    } else if (!key) {
+      key = await uniqueKey(slugify(name), id);
+    }
+
     await prisma.format.update({
       where: { id },
-      data: { name, description, displayOrder, isActive },
+      data: { name, description, displayOrder, isActive, key, shopifyKey },
     });
     return json({ success: true, action: "updated" });
   }
@@ -70,7 +113,7 @@ export const action = async ({ request }) => {
 };
 
 export default function AdminFormats() {
-  const { formats } = useLoaderData();
+  const { formats, shopifyKeyOptions = [] } = useLoaderData();
   const actionData = useActionData();
   const navigation = useNavigation();
   const [showModal, setShowModal] = useState(false);
@@ -102,6 +145,8 @@ export default function AdminFormats() {
             <tr>
               <th style={S.th}>Order</th>
               <th style={S.th}>Name</th>
+              <th style={S.th}>Key</th>
+              <th style={S.th}>Sold As (Shopify)</th>
               <th style={S.th}>Description</th>
               <th style={S.th}>Status</th>
               <th style={{ ...S.th, textAlign: "center" }}>Actions</th>
@@ -112,6 +157,16 @@ export default function AdminFormats() {
               <tr key={f.id} style={i % 2 ? S.altRow : {}}>
                 <td style={{ ...S.td, fontWeight: 600, color: "#6b7280", width: 60 }}>{f.displayOrder}</td>
                 <td style={{ ...S.td, fontWeight: 600 }}>{f.name}</td>
+                <td style={{ ...S.td, color: "#6b7280", fontFamily: "monospace", fontSize: 12 }}>{f.key || "—"}</td>
+                <td style={S.td}>
+                  {f.shopifyKey ? (
+                    <span style={{ ...S.statusBtn, background: "#eff6ff", color: "#1d4ed8", border: "1px solid #bfdbfe" }}>
+                      🛒 {f.shopifyKey}
+                    </span>
+                  ) : (
+                    <span style={{ color: "#9ca3af", fontSize: 12 }}>Personal</span>
+                  )}
+                </td>
                 <td style={{ ...S.td, color: "#6b7280", maxWidth: 300 }}>{f.description || "—"}</td>
                 <td style={S.td}>
                   <Form method="post" style={{ display: "inline" }}>
@@ -140,7 +195,7 @@ export default function AdminFormats() {
               </tr>
             ))}
             {formats.length === 0 && (
-              <tr><td colSpan={5} style={S.empty}>No formats configured. Click "Add Format" to create one.</td></tr>
+              <tr><td colSpan={7} style={S.empty}>No formats configured. Click "Add Format" to create one.</td></tr>
             )}
           </tbody>
         </table>
@@ -161,6 +216,17 @@ export default function AdminFormats() {
 
               <label style={S.label}>Format Name</label>
               <input type="text" name="name" required defaultValue={editFormat?.name || ""} placeholder="e.g. Lucite Cube" style={S.input} />
+
+              <label style={S.label}>Key <span style={{ color: "#9ca3af", fontWeight: 400 }}>(stable internal id — leave blank to auto-generate from name)</span></label>
+              <input type="text" name="key" defaultValue={editFormat?.key || ""} placeholder="e.g. lucite" style={{ ...S.input, fontFamily: "monospace" }} />
+
+              <label style={S.label}>Sold As — Shopify mapping <span style={{ color: "#9ca3af", fontWeight: 400 }}>(pick a size to make this format purchasable with live price/stock)</span></label>
+              <select name="shopifyKey" defaultValue={editFormat?.shopifyKey || ""} style={S.input}>
+                <option value="">— Personal (not sold) —</option>
+                {shopifyKeyOptions.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
 
               <label style={S.label}>Description</label>
               <textarea name="description" rows={2} defaultValue={editFormat?.description || ""} placeholder="Brief description..." style={S.textarea} />

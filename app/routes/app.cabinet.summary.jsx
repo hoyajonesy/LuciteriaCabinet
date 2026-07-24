@@ -22,6 +22,7 @@ import { prisma } from "../lib/db.server";
 import { saveSamples } from "../lib/samples.server";
 import { checkMilestones } from "../lib/milestones.server";
 import { requireNotFrozen } from "../lib/frozen-guard.server";
+import { getActiveFormats, getFormatMaps, formatLabel, preferredFormatKey } from "../lib/formats-db.server";
 
 /* ─────────────── server-side formatting helpers ─────────────── */
 
@@ -83,7 +84,7 @@ function noteToSample(note, fallbackFormat) {
   };
 }
 
-async function loadLedger(userId) {
+async function loadLedger(userId, formatMaps) {
   const items = await prisma.collectionItem.findMany({
     where: { userId, state: "OWNED" },
     include: { samples: true, elementNote: true },
@@ -124,7 +125,7 @@ async function loadLedger(userId) {
         if (!earliest || dt < earliest) earliest = dt;
         if (!mostRecent || dt > mostRecent) mostRecent = dt;
       }
-      if (s.format) formatSet.add(s.format);
+      if (s.format) formatSet.add(formatLabel(s.format, formatMaps));
       if (s.condition) conditionSet.add(s.condition);
 
       return {
@@ -132,7 +133,7 @@ async function loadLedger(userId) {
         source: s.source || "—",
         pricePaidFmt: s.pricePaid != null ? fmtMoney(s.pricePaid, s.currency) : "—",
         condition: s.condition || "—",
-        format: s.format || "—",
+        format: s.format ? formatLabel(s.format, formatMaps) : "—",
         storageLocation: s.storageLocation || "—",
         notes: s.notes || "—",
       };
@@ -193,14 +194,19 @@ export const loader = async ({ request }) => {
   const authUser = await getUserById(userId);
   if (!authUser) return redirect("/onboarding/welcome");
 
-  const { rows, totals } = await loadLedger(userId);
+  const formatMaps = await getFormatMaps();
+  const { rows, totals } = await loadLedger(userId, formatMaps);
   const unreadCount = await getUnreadCount(userId);
+  const activeFormats = await getActiveFormats();
+  const preferredFormat = preferredFormatKey(authUser, formatMaps.activeKeys);
 
   return json({
     rows,
     totals,
     customerName: authUser.firstName || "Collector",
     unreadCount,
+    activeFormats,
+    preferredFormat,
   });
 };
 
@@ -246,7 +252,7 @@ const COLUMNS = [
 ];
 
 export default function CollectionSummary() {
-  const { rows, totals, customerName, unreadCount } = useLoaderData();
+  const { rows, totals, customerName, unreadCount, activeFormats = [], preferredFormat = "" } = useLoaderData();
   const [expanded, setExpanded] = useState(() => new Set());
   const [sortKey, setSortKey] = useState("name");
   const [sortDir, setSortDir] = useState("asc");
@@ -407,6 +413,8 @@ export default function CollectionSummary() {
           key={editRow.symbol}
           element={{ z: editRow.atomicNumber, sym: editRow.symbol, name: editRow.name }}
           samples={editRow.editSamples}
+          formats={activeFormats}
+          defaultFormat={preferredFormat}
           onClose={() => setEditRow(null)}
           onSaved={() => setEditRow(null)}
         />
