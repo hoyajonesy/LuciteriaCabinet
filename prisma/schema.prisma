@@ -701,9 +701,18 @@ model AdminUser {
 model Format {
   id           String   @id @default(uuid())
   name         String   @unique
+  // Stable, machine-readable identifier stored on samples / collection items /
+  // user preferences. Decouples the persisted value from the display name so
+  // admins can rename a format without breaking existing collector data.
+  key          String   @unique @default("")
   description  String   @default("")
   displayOrder Int      @default(0)
   isActive     Boolean  @default(true)
+  // Optional mapping to a Shopify `periodic_size` metafield value
+  // (e.g. "10mm_cube", "lucite_cube", "ampule"). When set, the format is
+  // "purchasable": it resolves to real products with live price + stock in the
+  // shop / wishlist flow. Leave null for personal-only formats (Foil, Wire, …).
+  shopifyKey   String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

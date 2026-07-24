@@ -29,6 +29,7 @@ import {
 import { checkMilestones } from "../lib/milestones.server";
 import { getSamples, getSampleCounts, saveSamples } from "../lib/samples.server";
 import { notifyMilestone, getUnreadCount } from "../lib/notifications-db.server";
+import { getActiveFormats, getFormatMaps, preferredFormatKey } from "../lib/formats-db.server";
 
 export const loader = async ({ request }) => {
   const { getProductLinkWithFallback } = await import("../data/product-links.server");
@@ -45,6 +46,11 @@ export const loader = async ({ request }) => {
   const activityFeed = await getActivityFeed(userId, 5);
   const unreadCount = await getUnreadCount(userId);
   const sampleCounts = await getSampleCounts(userId);
+
+  // Active formats (single source of truth) + this collector's default format.
+  const activeFormats = await getActiveFormats();
+  const { activeKeys } = await getFormatMaps();
+  const preferredFormat = preferredFormatKey(authUser, activeKeys);
 
   const collectionStates = {};
   for (const sym of stats.ownedSymbols) collectionStates[sym] = "OWNED";
@@ -115,6 +121,8 @@ export const loader = async ({ request }) => {
     recommendations: recs,
     activityFeed,
     unreadCount,
+    activeFormats,
+    preferredFormat,
     authUser: { firstName: authUser.firstName, subscriptionFormat: authUser.subscriptionFormat },
   });
 };
@@ -182,6 +190,7 @@ export default function PeriodicTablePage() {
   const {
     elements, collectionStates, sampleCounts, stats, closestGroups,
     recommendations, activityFeed, unreadCount, authUser,
+    activeFormats = [], preferredFormat = "",
   } = useLoaderData();
 
   const fetcher = useFetcher();
@@ -412,6 +421,8 @@ export default function PeriodicTablePage() {
           key={notesEl.sym}
           element={notesEl}
           samples={activeSamples}
+          formats={activeFormats}
+          defaultFormat={preferredFormat}
           onClose={() => { setNotesEl(null); setActiveSamples([]); }}
           onSaved={handleSaved}
         />

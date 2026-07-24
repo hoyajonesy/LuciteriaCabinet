@@ -11,22 +11,18 @@ import OnboardingLayout from "../components/OnboardingLayout";
 import Toast from "../components/Toast";
 import { getUserById, updateUser } from "../lib/auth.server";
 import { requireUserId } from "../lib/session.server";
-
-const FORMATS = [
-  { id: "10mm", label: "10mm Cubes", desc: "Pocket-sized precision cubes", icon: "🔸" },
-  { id: "10mm_shards", label: "10mm Box (Shards/Flakes)", desc: "10mm box with shards or flakes", icon: "🔹" },
-  { id: "25.4mm", label: "25.4mm Cubes (1 inch)", desc: "Our most popular size", icon: "🔶" },
-  { id: "50mm", label: "50mm Cubes", desc: "Statement pieces, museum-grade", icon: "🟧" },
-  { id: "lucite", label: "Lucite Cubes", desc: "Elements embedded in crystal-clear acrylic", icon: "💎" },
-  { id: "ampoules", label: "Ampoules", desc: "Sealed glass vials for reactive elements", icon: "🧪" },
-];
+import { getActiveFormats } from "../lib/formats-db.server";
 
 export const loader = async ({ request }) => {
   const userId = await requireUserId(request);
   const user = await getUserById(userId);
   if (!user) return redirect("/onboarding/welcome");
   if (user.onboardingCompleted) return redirect("/app/cabinet");
-  return json({ user });
+  // Formats come from Admin → Formats (single source of truth). Shape them into
+  // the option format this screen expects.
+  const active = await getActiveFormats();
+  const formats = active.map((f) => ({ id: f.key, label: f.name, desc: f.description || "" }));
+  return json({ user, formats });
 };
 
 export const action = async ({ request }) => {
@@ -60,7 +56,7 @@ export const action = async ({ request }) => {
 };
 
 export default function OnboardingFormats() {
-  const { user } = useLoaderData();
+  const { user, formats: FORMATS = [] } = useLoaderData();
   const actionData = useActionData();
   const navigation = useNavigation();
   const isSubmitting = navigation.state === "submitting";
@@ -111,7 +107,7 @@ export default function OnboardingFormats() {
             >
               <option value="">Select your subscription format...</option>
               {FORMATS.map((f) => (
-                <option key={f.id} value={f.id}>{f.icon} {f.label}</option>
+                <option key={f.id} value={f.id}>{f.label}</option>
               ))}
             </select>
           </div>
@@ -143,7 +139,7 @@ export default function OnboardingFormats() {
                     onChange={() => !isSubFormat && toggleTracked(f.id)}
                     style={{ display: "none" }}
                   />
-                  <span style={styles.formatIcon}>{f.icon}</span>
+                  <span style={styles.formatIcon}>{f.icon || "🧊"}</span>
                   <span style={styles.formatLabel}>{f.label}</span>
                   <span style={styles.formatDesc}>{f.desc}</span>
                   <span style={{

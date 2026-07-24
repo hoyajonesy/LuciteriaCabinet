@@ -15,27 +15,10 @@ import { useFetcher } from "@remix-run/react";
 import { useEffect, useRef, useState } from "react";
 
 const CONDITIONS = ["Mint", "Excellent", "Good", "Fair", "Damaged"];
-const FORMATS = [
-  { id: "", name: "—" },
-  { id: "10mm", name: "10mm Cube" },
-  { id: "25.4mm", name: "1-inch Cube" },
-  { id: "50mm", name: "50mm Cube" },
-  { id: "lucite", name: "Lucite Cube" },
-  { id: "ampoules", name: "Ampoule" },
-  { id: "other", name: "Other" },
-];
 
-function blankSample() {
-  return {
-    acquisitionDate: "",
-    source: "",
-    pricePaid: "",
-    condition: "Mint",
-    format: "",
-    notes: "",
-    storageLocation: "",
-  };
-}
+// A leading "no format chosen" option is always available; the real formats
+// come from Admin → Formats (passed in via the `formats` prop).
+const NO_FORMAT = { id: "", name: "—" };
 
 function fromRecord(r) {
   return {
@@ -51,9 +34,31 @@ function fromRecord(r) {
   };
 }
 
-export default function NotesModal({ element, samples = [], onClose, onSaved }) {
+export default function NotesModal({
+  element,
+  samples = [],
+  formats = [],
+  defaultFormat = "",
+  onClose,
+  onSaved,
+}) {
   const fetcher = useFetcher();
   const wasSubmitting = useRef(false);
+
+  // Full option list: "—" first, then every active admin format.
+  const formatOptions = [NO_FORMAT, ...formats];
+
+  const blankSample = () => ({
+    acquisitionDate: "",
+    source: "",
+    pricePaid: "",
+    condition: "Mint",
+    // Default new samples to the user's onboarding format, but the field stays
+    // fully editable so any other active format can be chosen.
+    format: defaultFormat || "",
+    notes: "",
+    storageLocation: "",
+  });
 
   const [rows, setRows] = useState(() =>
     samples && samples.length ? samples.map(fromRecord) : [blankSample()]
@@ -209,7 +214,7 @@ export default function NotesModal({ element, samples = [], onClose, onSaved }) 
                       onChange={(e) => update(i, "format", e.target.value)}
                       className="w-full border border-gray-300 rounded px-3 py-2 text-sm text-gray-700 bg-white appearance-none pr-8"
                     >
-                      {FORMATS.map((f) => (
+                      {formatOptions.map((f) => (
                         <option key={f.id} value={f.id}>{f.name}</option>
                       ))}
                     </select>

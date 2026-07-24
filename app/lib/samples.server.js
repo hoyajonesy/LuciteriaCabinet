@@ -15,7 +15,20 @@ import { prisma } from './db.server.js';
 import { ELEMENTS_118 } from '../data/elements.server.js';
 
 export const CONDITIONS = ['Mint', 'Excellent', 'Good', 'Fair', 'Damaged'];
-export const SAMPLE_FORMATS = ['10mm', '25.4mm', '50mm', 'lucite', 'ampoules'];
+
+/**
+ * The set of format keys a sample may be saved with is the set of ACTIVE
+ * formats defined in Admin → Formats (the single source of truth). Loaded
+ * fresh on each save so newly-added / renamed / deactivated formats are always
+ * honored. Any value not in this set is stored as null.
+ */
+async function getValidFormatKeys() {
+  const rows = await prisma.format.findMany({
+    where: { isActive: true },
+    select: { key: true },
+  });
+  return new Set(rows.map((r) => r.key).filter(Boolean));
+}
 
 /**
  * Ensure a CollectionItem exists for (user, element). Returns the item.
@@ -64,7 +77,7 @@ export async function getSampleCounts(userId) {
 /**
  * Validate + clean a single raw sample object.
  */
-function sanitizeSample(raw) {
+function sanitizeSample(raw, validFormatKeys) {
   const data = {};
 
   if (raw.acquisitionDate) {
@@ -96,7 +109,10 @@ function sanitizeSample(raw) {
     data.condition = null;
   }
 
-  if (raw.format && SAMPLE_FORMATS.includes(raw.format)) {
+  // Accept any format key that is currently active in Admin → Formats.
+  // (Previously a hardcoded whitelist silently dropped "Other", "Foil", etc.,
+  // which is why those never carried through to the ledger.)
+  if (raw.format && (!validFormatKeys || validFormatKeys.has(raw.format))) {
     data.format = raw.format;
   } else {
     data.format = null;
@@ -133,8 +149,9 @@ function isEmptySample(s) {
  * @param {Array<object>} rawSamples
  */
 export async function saveSamples(userId, elementSymbol, rawSamples) {
+  const validFormatKeys = await getValidFormatKeys();
   const cleaned = (Array.isArray(rawSamples) ? rawSamples : [])
-    .map(sanitizeSample)
+    .map((s) => sanitizeSample(s, validFormatKeys))
     .filter((s) => !isEmptySample(s));
 
   const item = await ensureCollectionItem(userId, elementSymbol, cleaned.length > 0);

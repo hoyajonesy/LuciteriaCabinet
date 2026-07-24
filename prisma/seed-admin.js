@@ -90,22 +90,26 @@ async function main() {
 
   // ─── 2. Formats ───
   console.log("📐 Creating formats...");
+  // `key` = stable machine value stored on user prefs / samples (matches the
+  // sample-convention values used across onboarding & the ledger).
+  // `shopifyKey` = mapping to a Shopify periodic_size value (null => personal).
   const formatDefs = [
-    { name: "Lucite Cube", description: "50mm acrylic display cube with embedded element sample", displayOrder: 1 },
-    { name: "10mm Cube", description: "Small 10mm metal cube for compact collections", displayOrder: 2 },
-    { name: "1 inch Cube", description: "25.4mm (1 inch) metal cube, mid-size display", displayOrder: 3 },
-    { name: "Ampoule", description: "Sealed glass ampoule containing element sample", displayOrder: 4 },
-    { name: "Foil", description: "Thin foil specimen for flat element samples", displayOrder: 5 },
-    { name: "Wire", description: "Wire-form element specimen", displayOrder: 6 },
-    { name: "Crystal", description: "Crystalline form element specimen", displayOrder: 7 },
-    { name: "Coin/Disc", description: "Coin or disc-shaped element specimen", displayOrder: 8 },
-    { name: "Other", description: "Other format not listed above", displayOrder: 9 },
+    { name: "Lucite Cube", key: "lucite",    shopifyKey: "lucite_cube", description: "50mm acrylic display cube with embedded element sample", displayOrder: 1 },
+    { name: "10mm Cube",   key: "10mm",      shopifyKey: "10mm_cube",   description: "Small 10mm metal cube for compact collections", displayOrder: 2 },
+    { name: "1 inch Cube", key: "25.4mm",    shopifyKey: "25.4mm_cube", description: "25.4mm (1 inch) metal cube, mid-size display", displayOrder: 3 },
+    { name: "Ampoule",     key: "ampoules",  shopifyKey: "ampule",      description: "Sealed glass ampoule containing element sample", displayOrder: 4 },
+    { name: "Foil",        key: "foil",      shopifyKey: null,          description: "Thin foil specimen for flat element samples", displayOrder: 5 },
+    { name: "Wire",        key: "wire",      shopifyKey: null,          description: "Wire-form element specimen", displayOrder: 6 },
+    { name: "Crystal",     key: "crystal",   shopifyKey: null,          description: "Crystalline form element specimen", displayOrder: 7 },
+    { name: "Coin/Disc",   key: "coin_disc", shopifyKey: null,          description: "Coin or disc-shaped element specimen", displayOrder: 8 },
+    { name: "Other",       key: "other",     shopifyKey: null,          description: "Other format not listed above", displayOrder: 9 },
   ];
 
   for (const f of formatDefs) {
     await prisma.format.upsert({
       where: { name: f.name },
-      update: { description: f.description, displayOrder: f.displayOrder },
+      // Backfill key/shopifyKey on existing rows too (safe idempotent upgrade).
+      update: { description: f.description, displayOrder: f.displayOrder, key: f.key, shopifyKey: f.shopifyKey },
       create: f,
     });
   }

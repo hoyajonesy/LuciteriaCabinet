@@ -21,6 +21,13 @@ import { getUnreadCount } from "../lib/notifications-db.server";
 import { ELEMENTS_118 } from "../data/elements.server";
 import { FORMATS, FORMAT_LIST, parseSizes } from "../lib/formats";
 import { prisma } from "../lib/db.server";
+import {
+  getActiveFormats,
+  getFormatMaps,
+  formatLabel,
+  shopifyKeyForFormat,
+  preferredFormatKey,
+} from "../lib/formats-db.server";
 
 
 const PRIORITY_LABEL = { 3: "High", 2: "Medium", 1: "Low", 0: "Low" };
@@ -36,7 +43,12 @@ export const loader = async ({ request }) => {
   const stats = await getCollectionStats(userId);
   const unreadCount = await getUnreadCount(userId);
 
-  const preferredFormat = authUser.subscriptionFormat || "lucite_cube";
+  // Formats come from Admin → Formats (single source of truth). Resolve the
+  // collector's default format (canonical key) and its Shopify mapping.
+  const formatMaps = await getFormatMaps();
+  const activeFormats = await getActiveFormats();
+  const preferredFormat = preferredFormatKey(authUser, formatMaps.activeKeys);
+  const preferredShopifyKey = shopifyKeyForFormat(preferredFormat, formatMaps) || "lucite_cube";
 
   // Fetch all products from Prisma database to get fresh stock and prices
   const allProducts = await prisma.product.findMany();
@@ -46,10 +58,14 @@ export const loader = async ({ request }) => {
     const el = ELEMENTS_118.find((e) => e.sym === it.elementSymbol);
     let variant = null;
 
-    if (it.format && el?.productsByFormat?.[it.format]) {
-      variant = el.productsByFormat[it.format];
-    } else if (preferredFormat && el?.productsByFormat?.[preferredFormat]) {
-      variant = el.productsByFormat[preferredFormat];
+    // Stored format may be a canonical key ("lucite") or legacy Shopify value
+    // ("lucite_cube"). Resolve to the Shopify key for product lookups.
+    const itemShopifyKey = shopifyKeyForFormat(it.format, formatMaps);
+
+    if (itemShopifyKey && el?.productsByFormat?.[itemShopifyKey]) {
+      variant = el.productsByFormat[itemShopifyKey];
+    } else if (preferredShopifyKey && el?.productsByFormat?.[preferredShopifyKey]) {
+      variant = el.productsByFormat[preferredShopifyKey];
     } else if (el?.products && el.products.length > 0) {
       variant = el.products[0];
     }
@@ -66,8 +82,9 @@ export const loader = async ({ request }) => {
     const displayName = variant?.title || it.elementName;
 
     let fmt = "No format chosen";
-    if (it.format && FORMATS[it.format]) {
-      fmt = FORMATS[it.format].name;
+    if (it.format) {
+      // Prefer the admin format's display name (handles Foil/Wire/etc. too).
+      fmt = formatLabel(it.format, formatMaps);
     } else if (variant?.variantTitle && variant.variantTitle !== "Default Title") {
       fmt = variant.variantTitle;
     } else if (variant?.size) {
@@ -121,7 +138,15 @@ export const loader = async ({ request }) => {
     firstName: authUser.firstName || "Collector",
     shareSlug: (authUser.firstName || "collector").toLowerCase().replace(/[^a-z0-9]/g, "") + "-" + userId.slice(0, 4),
     compactElements,
-    modalFormats: FORMAT_LIST.map((f) => ({ id: f.id, name: f.name })),
+    // Every active admin format, with its Shopify mapping so the modal can show
+    // live price/stock for purchasable formats.
+    modalFormats: activeFormats.map((f) => ({
+      id: f.key,
+      name: f.name,
+      shopifyKey: f.shopifyKey,
+      purchasable: f.purchasable,
+    })),
+    preferredFormat,
   });
 };
 
@@ -164,7 +189,7 @@ function StockPill({ stock }) {
 }
 
 export default function WishlistPage() {
-  const { wishlist, unreadCount, firstName, shareSlug, ownedSymbols, wantedSymbols, watchlistSymbols, compactElements, modalFormats } =
+  const { wishlist, unreadCount, firstName, shareSlug, ownedSymbols, wantedSymbols, watchlistSymbols, compactElements, modalFormats, preferredFormat } =
     useLoaderData();
   const fetcher = useFetcher();
   const [priorityFilter, setPriorityFilter] = useState("all");
@@ -492,6 +517,7 @@ export default function WishlistPage() {
         <AddToWishlistModal
           elements={compactElements}
           formats={modalFormats}
+          defaultFormat={preferredFormat}
           ownedSymbols={ownedSymbols}
           wantedSymbols={wantedSymbols}
           watchlistSymbols={watchlistSymbols}
