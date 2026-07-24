@@ -49,14 +49,16 @@ export default function AppNav({
   return (
     <aside className="luc-sidebar w-56 flex-shrink-0 bg-white border-r border-luc-border flex flex-col min-h-screen">
       {/* Brand */}
-      <Link
-        to="/app/cabinet"
+      <a
+        href="https://luciteria.com"
+        target="_blank"
+        rel="noopener noreferrer"
         className="px-5 py-4 border-b border-luc-border flex items-center gap-2"
         style={{ textDecoration: "none" }}
       >
         <img src="/logo.png" alt="Luciteria Science" className="brand-text h-8 w-auto" />
         <i className="fa-solid fa-atom brand-icon text-lg text-luc-blue" aria-hidden="true"></i>
-      </Link>
+      </a>
 
       {/* Nav */}
       <nav className="text-sm py-2 flex-1">

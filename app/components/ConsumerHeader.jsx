@@ -53,9 +53,15 @@ export default function ConsumerHeader({ ctaTo = "/onboarding/welcome?mode=login
 
       <nav className="mx-auto flex max-w-container items-center justify-between px-5 py-4 sm:px-page">
         {/* Logo */}
-        <Link to="/" className="flex flex-shrink-0 items-center" aria-label="Luciteria Science home">
+        <a
+          href="https://luciteria.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex flex-shrink-0 items-center"
+          aria-label="Luciteria Science home"
+        >
           <img src="/logo.png" alt="Luciteria Science" className="h-9 w-auto sm:h-10" />
-        </Link>
+        </a>
 
         {/* Center nav (desktop) */}
         <div className="hidden items-center gap-8 md:flex">

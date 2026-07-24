@@ -3,7 +3,6 @@
  * Restyled to match the Shopify "Live Working Theme": white surface,
  * DM Sans headings, Inter body, blue (#5781D8) accent, large rounded cards.
  */
-import { Link } from "@remix-run/react";
 
 const STEPS = [
   { num: 1, label: "Account" },
@@ -16,9 +15,15 @@ export default function OnboardingLayout({ step = 1, hideProgress = false, child
     <div className="flex min-h-screen flex-col items-center bg-luc-gray px-5 py-10 font-sans text-luc-text sm:py-14">
       <div className="w-full max-w-2xl">
         {/* Branding */}
-        <Link to="/" className="mb-8 flex items-center justify-center" aria-label="Luciteria Science home">
+        <a
+          href="https://luciteria.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mb-8 flex items-center justify-center"
+          aria-label="Luciteria Science home"
+        >
           <img src="/logo.png" alt="Luciteria Science" className="h-10 w-auto" />
-        </Link>
+        </a>
 
         {/* Progress indicator */}
         {!hideProgress && (
