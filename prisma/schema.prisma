@@ -45,6 +45,14 @@ model User {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
+  // ─── Collection Passport: public collector profile fields ───
+  handle           String? @unique // Collector handle used in the public URL, e.g. "sarahk_42"
+  displayName      String? // Overridable display name (defaults auto-generated from account data)
+  bio              String? // Short collector biography (max 280 chars, enforced in app layer)
+  location         String? // Free-text city/country (max 60 chars, enforced in app layer)
+  favouriteElement String? // Element symbol shown as a badge on the Passport
+  avatarUrl        String? // Path/URL to uploaded avatar; null = use Luciteria default
+
   // Password reset fields
   resetToken       String?   @unique
   resetTokenExpiry DateTime?
@@ -87,6 +95,9 @@ model User {
   // ─── Admin MVP relationships ───
   freezeLogs          FreezeLog[]
   userMilestoneAwards UserMilestoneAward[]
+
+  // ─── Collection Passport relationship ───
+  passport CollectorPassport?
 
   @@index([email])
   @@index([wishlistToken])
@@ -1130,4 +1141,43 @@ model AssignmentPreview {
   @@index([subscriptionId])
   @@index([customerId])
   @@index([productId])
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// COLLECTION PASSPORT — Viral Growth Feature (Option 1)
+// ═══════════════════════════════════════════════════════════════
+
+// ─── CollectorPassport (one shareable public profile per account) ──
+model CollectorPassport {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  published   Boolean   @default(false)
+  publishedAt DateTime?
+
+  featuredElements PassportFeaturedElement[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([published])
+}
+
+// ─── PassportFeaturedElement (up to 5 curated owned elements) ──
+model PassportFeaturedElement {
+  id         String            @id @default(cuid())
+  passportId String
+  passport   CollectorPassport @relation(fields: [passportId], references: [id], onDelete: Cascade)
+
+  elementKey   String // matches the element symbol used elsewhere (e.g. "Fe", "Au")
+  format       String? // which owned format to show (e.g. "10mm_cube", "lucite")
+  displayOrder Int // 1–5, user-defined ordering
+
+  createdAt DateTime @default(now())
+
+  @@unique([passportId, elementKey])
+  @@unique([passportId, displayOrder])
+  @@index([passportId])
 }

@@ -3,8 +3,8 @@
  * Faithful port of the collection.html / main-dashboard.html wireframe sidebar
  * (Tailwind, gray theme, FontAwesome icons).
  *
- * Customer nav = exactly 5 items per product spec:
- *   Dashboard · Collection · Wishlist · Shop · Notifications
+ * Customer nav items:
+ *   Dashboard · Collection · My Ledger · Wishlist · My Passport · Shop · Notifications
  * (The "Progress" item shown in some wireframes is intentionally omitted.)
  */
 import { Link, useLocation, Form } from "@remix-run/react";
@@ -14,6 +14,7 @@ const CUSTOMER_NAV = [
   { label: "Collection", path: "/app/cabinet/periodic-table", icon: "fa-table-cells" },
   { label: "My Ledger", path: "/app/cabinet/summary", icon: "fa-list" },
   { label: "Wishlist", path: "/app/cabinet/wishlist", icon: "fa-heart" },
+  { label: "My Passport", path: "/app/cabinet/passport", icon: "fa-id-card" },
   { label: "Shop", path: "/app/cabinet/shop", icon: "fa-cart-shopping" },
   { label: "Notifications", path: "/app/cabinet/notifications", icon: "fa-bell", badgeKey: "unread" },
 ];

@@ -3,7 +3,7 @@
  * Wired to real WANTED collection items (priority + format are real, editable).
  */
 import { json, redirect } from "@remix-run/node";
-import { useLoaderData, useFetcher } from "@remix-run/react";
+import { useLoaderData, useFetcher, Link } from "@remix-run/react";
 import { useState, useEffect } from "react";
 import AppNav from "../components/AppNav";
 import AddToWishlistModal from "../components/AddToWishlistModal";
@@ -429,6 +429,16 @@ export default function WishlistPage() {
                     </select>
                   </div>
                   <div className="flex items-center justify-center gap-2">
+                    {ownedSymbols?.includes(w.symbol) && (
+                      <Link
+                        to={`/app/cabinet/passport?feature=${w.symbol}`}
+                        className="w-8 h-8 rounded-md border border-gray-300 bg-white text-luc-blue hover:bg-gray-50 flex items-center justify-center"
+                        title="Feature on Passport"
+                        style={{ textDecoration: "none" }}
+                      >
+                        <i className="fa-solid fa-id-card" />
+                      </Link>
+                    )}
                     <button
                       onClick={() => copyProductLink(w)}
                       className="w-8 h-8 rounded-md border border-gray-300 bg-white text-gray-500 hover:bg-gray-50"
