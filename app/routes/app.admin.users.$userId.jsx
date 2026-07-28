@@ -4,12 +4,16 @@
  * Shows a specific user's collection, milestones, goals, and activity.
  */
 import { json, redirect } from "@remix-run/node";
-import { useLoaderData, Link } from "@remix-run/react";
-import { getUserCollectionDetail } from "../lib/admin.server.js";
+import { useLoaderData, Link, Form, useActionData } from "@remix-run/react";
+import { getUserCollectionDetail, requireAdmin } from "../lib/admin.server.js";
+import { prisma } from "../lib/db.server.js";
+import { unpublishPassport } from "../lib/passport.server.js";
 import { ELEMENTS_118 } from "../data/elements.server.js";
 import PeriodicTable from "../components/PeriodicTable.jsx";
 import ProgressBar from "../components/ProgressBar.jsx";
 import MetricCard from "../components/admin/MetricCard.jsx";
+
+const PUBLIC_BASE = "https://cabinet.luciteria.com/p/";
 
 export const loader = async ({ params }) => {
   const detail = await getUserCollectionDetail(params.userId);
@@ -22,14 +26,44 @@ export const loader = async ({ params }) => {
     atomicNumber: el.z,
   }));
 
+  // Collection Passport summary for staff oversight.
+  const dbUser = await prisma.user.findUnique({
+    where: { id: params.userId },
+    select: { handle: true, passport: { select: { published: true, publishedAt: true } } },
+  });
+  const passport = {
+    exists: Boolean(dbUser?.passport),
+    published: Boolean(dbUser?.passport?.published),
+    publishedAt: dbUser?.passport?.publishedAt || null,
+    handle: dbUser?.handle || null,
+    publicUrl: dbUser?.handle ? `${PUBLIC_BASE}${dbUser.handle}` : null,
+  };
+
   return json({
     ...detail,
     elements,
+    passport,
   });
 };
 
+export const action = async ({ request, params }) => {
+  // Staff-only guard (this route is also wrapped by the admin layout).
+  await requireAdmin(request);
+
+  const form = await request.formData();
+  const intent = form.get("intent");
+
+  if (intent === "unpublish-passport") {
+    await unpublishPassport(params.userId);
+    return json({ ok: true, message: "Passport unpublished." });
+  }
+
+  return json({ error: "Unknown action." }, { status: 400 });
+};
+
 export default function AdminUserDetail() {
-  const { user, stats, collectionStates, items, milestones, goals, recentActivity, elements } = useLoaderData();
+  const { user, stats, collectionStates, items, milestones, goals, recentActivity, elements, passport } = useLoaderData();
+  const actionData = useActionData();
 
   return (
     <div>
@@ -66,6 +100,63 @@ export default function AdminUserDetail() {
         <MetricCard title="Wanted" value={stats.wanted} icon="💛" accent="#eab308" />
         <MetricCard title="Watchlist" value={stats.watchlist} icon="👁️" accent="#7c3aed" />
         <MetricCard title="Completion" value={`${stats.completionPercent}%`} icon="🏆" accent="#2563eb" />
+      </div>
+
+      {/* ─── Collection Passport ─── */}
+      <div style={styles.card}>
+        <div style={styles.cardHeader}>
+          <h3 style={styles.cardTitle}>🪪 Collection Passport</h3>
+        </div>
+        <div style={styles.cardBody}>
+          {actionData?.message && (
+            <div style={styles.noticeOk}>{actionData.message}</div>
+          )}
+          {actionData?.error && (
+            <div style={styles.noticeErr}>{actionData.error}</div>
+          )}
+          {!passport.exists ? (
+            <div style={{ fontSize: 13, color: 'var(--luc-text-muted, #666)' }}>
+              This collector hasn't set up a Passport yet.
+            </div>
+          ) : (
+            <div style={styles.passportRow}>
+              <div style={{ flex: 1 }}>
+                <div style={{ marginBottom: 6 }}>
+                  <span style={passport.published ? styles.pubBadge : styles.draftBadge}>
+                    {passport.published ? "Published" : "Draft"}
+                  </span>
+                  {passport.publishedAt && (
+                    <span style={{ fontSize: 12, color: 'var(--luc-text-muted, #999)', marginLeft: 8 }}>
+                      since {new Date(passport.publishedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </span>
+                  )}
+                </div>
+                {passport.handle ? (
+                  <div style={{ fontSize: 13 }}>
+                    <span style={{ color: 'var(--luc-text-muted, #666)' }}>Public URL: </span>
+                    {passport.published ? (
+                      <a href={passport.publicUrl} target="_blank" rel="noreferrer" style={styles.breadcrumbLink}>
+                        {passport.publicUrl}
+                      </a>
+                    ) : (
+                      <span style={{ color: 'var(--luc-text-muted, #999)' }}>{passport.publicUrl}</span>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 13, color: 'var(--luc-text-muted, #999)' }}>No handle set.</div>
+                )}
+              </div>
+              {passport.published && (
+                <Form method="post" onSubmit={(e) => {
+                  if (!confirm("Unpublish this collector's Passport? Their public page will go offline immediately.")) e.preventDefault();
+                }}>
+                  <input type="hidden" name="intent" value="unpublish-passport" />
+                  <button type="submit" style={styles.unpublishBtn}>Unpublish Passport</button>
+                </Form>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ─── Progress Bar ─── */}
@@ -186,6 +277,56 @@ export default function AdminUserDetail() {
 }
 
 const styles = {
+  passportRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 16,
+  },
+  pubBadge: {
+    display: 'inline-block',
+    background: '#dcfce7',
+    color: '#059669',
+    fontSize: 11,
+    fontWeight: 700,
+    padding: '2px 8px',
+    borderRadius: 8,
+  },
+  draftBadge: {
+    display: 'inline-block',
+    background: '#fef3c7',
+    color: '#b45309',
+    fontSize: 11,
+    fontWeight: 700,
+    padding: '2px 8px',
+    borderRadius: 8,
+  },
+  unpublishBtn: {
+    background: '#fff',
+    color: '#dc2626',
+    border: '1px solid #fca5a5',
+    borderRadius: 8,
+    padding: '8px 14px',
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  },
+  noticeOk: {
+    background: '#dcfce7',
+    color: '#059669',
+    fontSize: 13,
+    padding: '8px 12px',
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  noticeErr: {
+    background: '#fee2e2',
+    color: '#dc2626',
+    fontSize: 13,
+    padding: '8px 12px',
+    borderRadius: 8,
+    marginBottom: 12,
+  },
   breadcrumb: {
     marginBottom: 16,
   },

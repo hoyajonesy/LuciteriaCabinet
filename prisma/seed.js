@@ -279,6 +279,7 @@ async function main() {
     { flagName: "phase2_completion_display", isEnabled: false, description: "Show completion progress UI" },
     { flagName: "phase2_suggestions", isEnabled: false, description: "Display missing element suggestions" },
     { flagName: "phase3_enabled", isEnabled: false, description: "Dynamic curation system (always false)" },
+    { flagName: "feature_collection_passport", isEnabled: true, description: "Collection Passport public collector profiles" },
   ];
   for (const flag of FLAGS) {
     await prisma.featureFlag.create({ data: flag });
