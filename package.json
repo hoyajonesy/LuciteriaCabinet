@@ -34,6 +34,7 @@
     "@shopify/app-bridge-react": "^4.1.0",
     "@shopify/polaris": "^12.20.0",
     "@shopify/polaris-icons": "^9.0.0",
+    "@vercel/blob": "^2.6.1",
     "@vercel/remix": "2.16.7",
     "archiver": "^8.0.0",
     "bcryptjs": "^3.0.3",

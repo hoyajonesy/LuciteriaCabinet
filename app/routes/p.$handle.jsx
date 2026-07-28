@@ -189,7 +189,7 @@ export default function PublicPassport() {
             <h2 style={styles.sectionTitle}>Featured Elements</h2>
             <div style={styles.featuredGrid}>
               {featuredElements.map((el) => (
-                <div key={el.symbol} style={styles.featuredCard}>
+                <div key={el.uid || el.symbol} style={styles.featuredCard}>
                   <div style={styles.featuredImageWrap}>
                     {el.imageUrl ? (
                       <img src={el.imageUrl} alt={el.name} style={styles.featuredImage} />
