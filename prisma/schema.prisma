@@ -1177,7 +1177,9 @@ model PassportFeaturedElement {
 
   createdAt DateTime @default(now())
 
-  @@unique([passportId, elementKey])
+  // A given element may be featured once per format (e.g. Fe as a cube and
+  // Fe as an ampoule are two distinct featured entries).
+  @@unique([passportId, elementKey, format])
   @@unique([passportId, displayOrder])
   @@index([passportId])
 }

@@ -169,9 +169,12 @@ export default function PassportPage() {
 
   const isSubmitting = navigation.state === "submitting";
 
-  // Featured-element working set (client-side until saved).
+  // Featured-element working set (client-side until saved). Identity is the
+  // element + format combination (uid), so the same element can appear in more
+  // than one format.
   const [selected, setSelected] = useState(() =>
     featured.map((f) => ({
+      uid: f.uid,
       symbol: f.symbol,
       name: f.name,
       atomicNumber: f.atomicNumber,
@@ -196,9 +199,10 @@ export default function PassportPage() {
     const owned = ownedElements.find((o) => o.symbol === featureParam);
     if (!owned) return;
     setSelected((prev) => {
-      if (prev.some((p) => p.symbol === featureParam)) return prev;
+      if (prev.some((p) => p.uid === owned.uid)) return prev;
       if (prev.length >= maxFeatured) return prev;
       return [...prev, {
+        uid: owned.uid,
         symbol: owned.symbol,
         name: owned.name,
         atomicNumber: owned.atomicNumber,
@@ -211,7 +215,7 @@ export default function PassportPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [featureParam]);
 
-  const selectedSymbols = useMemo(() => new Set(selected.map((s) => s.symbol)), [selected]);
+  const selectedUids = useMemo(() => new Set(selected.map((s) => s.uid)), [selected]);
 
   const filteredOwned = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -223,11 +227,12 @@ export default function PassportPage() {
 
   const toggleElement = (el) => {
     setSelected((prev) => {
-      if (prev.some((p) => p.symbol === el.symbol)) {
-        return prev.filter((p) => p.symbol !== el.symbol);
+      if (prev.some((p) => p.uid === el.uid)) {
+        return prev.filter((p) => p.uid !== el.uid);
       }
       if (prev.length >= maxFeatured) return prev;
       return [...prev, {
+        uid: el.uid,
         symbol: el.symbol,
         name: el.name,
         atomicNumber: el.atomicNumber,
@@ -458,7 +463,7 @@ export default function PassportPage() {
                   );
                 }
                 return (
-                  <div key={el.symbol} className="aspect-square rounded-lg border border-gray-200 overflow-hidden bg-gray-50 relative">
+                  <div key={el.uid || el.symbol} className="aspect-square rounded-lg border border-gray-200 overflow-hidden bg-gray-50 relative">
                     {el.imageUrl ? (
                       <img src={el.imageUrl} alt={el.name} className="w-full h-full object-cover" />
                     ) : (
@@ -514,11 +519,11 @@ export default function PassportPage() {
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                   {filteredOwned.map((el) => {
-                    const isSel = selectedSymbols.has(el.symbol);
+                    const isSel = selectedUids.has(el.uid);
                     const disabled = !isSel && selected.length >= maxFeatured;
                     return (
                       <button
-                        key={el.symbol}
+                        key={el.uid}
                         type="button"
                         onClick={() => toggleElement(el)}
                         disabled={disabled}

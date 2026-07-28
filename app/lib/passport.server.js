@@ -17,7 +17,7 @@
 
 import { prisma } from './db.server.js';
 import { ELEMENTS_118 } from '../data/elements.server.js';
-import { FORMATS } from './formats.js';
+import { normaliseFormat, formatLabel, formatIcon } from './formats.js';
 
 export const MAX_FEATURED_ELEMENTS = 5;
 export const TOTAL_ELEMENTS = 118;
@@ -227,17 +227,21 @@ export async function updateFeaturedElements(passportId, elements) {
     .slice(0, MAX_FEATURED_ELEMENTS)
     .map((e, i) => ({
       elementKey: e.elementKey,
-      format: e.format || null,
+      // Store the canonical format id so the same element can be featured in
+      // more than one format (e.g. Fe as a cube and Fe as an ampoule).
+      format: normaliseFormat(e.format),
       displayOrder: Number.isInteger(e.displayOrder) ? e.displayOrder : i + 1,
     }));
 
-  // De-duplicate by elementKey and re-sequence displayOrder (1..n) to satisfy
-  // the composite unique constraints.
+  // De-duplicate by elementKey + format (a specific element-in-a-format may
+  // only appear once) and re-sequence displayOrder (1..n) to satisfy the
+  // composite unique constraints.
   const seen = new Set();
   const deduped = [];
   for (const el of cleaned) {
-    if (seen.has(el.elementKey)) continue;
-    seen.add(el.elementKey);
+    const uid = `${el.elementKey}::${el.format || ''}`;
+    if (seen.has(uid)) continue;
+    seen.add(uid);
     deduped.push({ ...el, displayOrder: deduped.length + 1 });
   }
 
@@ -288,14 +292,16 @@ export async function getCollectionStats(userId) {
     if (complete) setsCompleted += 1;
   }
 
-  // Formats collected: distinct, non-null formats among owned items.
+  // Formats collected: distinct formats among owned items, normalised so that
+  // legacy variants (Other/other, ampoules/ampule, lucite/lucite_cube, …)
+  // collapse to a single canonical format.
   const formatIds = [
-    ...new Set(ownedItems.map((i) => i.format).filter(Boolean)),
+    ...new Set(ownedItems.map((i) => normaliseFormat(i.format)).filter(Boolean)),
   ];
   const formatsCollected = formatIds.map((id) => ({
     id,
-    name: FORMATS[id]?.name || id,
-    icon: FORMATS[id]?.icon || '📦',
+    name: formatLabel(id) || id,
+    icon: formatIcon(id),
   }));
 
   return {
@@ -397,14 +403,17 @@ export async function resolveFeaturedElements(featured) {
 
   return featured.map((f) => {
     const el = resolveElement(f.elementKey);
-    const formatId = f.format;
+    const formatId = normaliseFormat(f.format);
     return {
       elementKey: f.elementKey,
       symbol: f.elementKey,
+      // Composite identity so the same element can be featured in more than
+      // one format without the two cards colliding.
+      uid: `${f.elementKey}::${formatId || ''}`,
       name: el?.name || f.elementKey,
       atomicNumber: el?.atomicNumber || null,
       format: formatId,
-      formatName: formatId ? FORMATS[formatId]?.name || formatId : null,
+      formatName: formatLabel(f.format),
       imageUrl: imageBySymbol.get(f.elementKey) || null,
       displayOrder: f.displayOrder,
     };
@@ -419,7 +428,14 @@ export async function resolveFeaturedElements(featured) {
 export async function getOwnedElementsForPicker(userId) {
   const items = await prisma.collectionItem.findMany({
     where: { userId, state: { in: ['OWNED', 'WANTED'] } },
-    select: { elementSymbol: true, state: true, format: true },
+    select: {
+      elementSymbol: true,
+      state: true,
+      format: true,
+      // A collector may own several samples of the same element, each in a
+      // different format — these are the real source of "multiple formats".
+      samples: { select: { format: true } },
+    },
   });
 
   const ownedItems = items.filter((i) => i.state === 'OWNED');
@@ -441,18 +457,36 @@ export async function getOwnedElementsForPicker(userId) {
     }
   }
 
-  return ownedItems
-    .map((i) => {
-      const el = resolveElement(i.elementSymbol);
-      return {
+  // One entry per distinct element + format combination the collector owns,
+  // so a collector who owns the same element in two formats can feature both.
+  const byUid = new Map();
+  for (const i of ownedItems) {
+    const el = resolveElement(i.elementSymbol);
+    // Every distinct format the collector owns for this element: the
+    // CollectionItem's own format plus any per-sample formats. Normalise and
+    // dedupe; if there are no real formats at all, keep a single null entry.
+    const rawFormats = [i.format, ...(i.samples || []).map((s) => s.format)];
+    const formatIds = [...new Set(rawFormats.map((f) => normaliseFormat(f)).filter(Boolean))];
+    const formats = formatIds.length ? formatIds : [null];
+    for (const formatId of formats) {
+      const uid = `${i.elementSymbol}::${formatId || ''}`;
+      if (byUid.has(uid)) continue;
+      byUid.set(uid, {
+        uid,
         symbol: i.elementSymbol,
         name: el?.name || i.elementSymbol,
         atomicNumber: el?.atomicNumber || 0,
-        format: i.format,
-        formatName: i.format ? FORMATS[i.format]?.name || i.format : null,
+        format: formatId,
+        formatName: formatLabel(formatId),
         imageUrl: imageBySymbol.get(i.elementSymbol) || null,
         isWishlisted: wantedSymbols.has(i.elementSymbol),
-      };
-    })
-    .sort((a, b) => a.atomicNumber - b.atomicNumber);
+      });
+    }
+  }
+
+  return [...byUid.values()].sort(
+    (a, b) =>
+      a.atomicNumber - b.atomicNumber ||
+      (a.formatName || '').localeCompare(b.formatName || '')
+  );
 }
