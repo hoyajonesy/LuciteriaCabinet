@@ -1,4 +1,25 @@
-import { parseSizes } from "./formats";
+import { parseSizes, normaliseFormat } from "./formats.js";
+
+/**
+ * Look up a product in productsByFormat by canonical format id, tolerating
+ * raw/aliased keys ("10mm" vs "10mm_cube") that may still exist in the map.
+ */
+function productForFormatKey(productsByFormat, formatId) {
+  if (!productsByFormat) return null;
+  if (productsByFormat[formatId]) return productsByFormat[formatId];
+  for (const [key, value] of Object.entries(productsByFormat)) {
+    if (normaliseFormat(key) === formatId) return value;
+  }
+  return null;
+}
+
+/**
+ * True when the element is offered in the given canonical format, comparing
+ * normalised size tokens so "10mm"/"10mm_cube" etc. all match.
+ */
+function sizesIncludeFormat(element, formatId) {
+  return parseSizes(element.size).map(normaliseFormat).includes(formatId);
+}
 
 export function isMixedFormat(formatId) {
   return !formatId || formatId === "other";
@@ -28,14 +49,14 @@ export function productForDisplayFormat(element, formatId) {
     );
   }
 
-  if (!parseSizes(element.size).includes(formatId)) return null;
-  return element.productsByFormat?.[formatId] || null;
+  if (!sizesIncludeFormat(element, formatId)) return null;
+  return productForFormatKey(element.productsByFormat, formatId);
 }
 
 export function elementForDisplayFormat(element, formatId) {
   const mixed = isMixedFormat(formatId);
   const product = productForDisplayFormat(element, formatId);
-  const available = mixed || (parseSizes(element.size).includes(formatId) && !!product);
+  const available = mixed || (sizesIncludeFormat(element, formatId) && !!product);
 
   if (!available) return null;
 

@@ -28,10 +28,24 @@ export const FORMAT_IDS  = FORMAT_LIST.map(f => f.id);
  * Maps each variant to its canonical FORMATS id.
  */
 const FORMAT_ALIASES = {
+  // 10mm metal cube — Shopify/DB store this as the bare size token "10mm"
   '10mm': '10mm_cube',
+  '10.1mm': '10mm_cube',
+  '10mm_cubes': '10mm_cube',
+  // 10mm box of shards/flakes
+  '10mm_flakes': '10mm_shards',
+  '10mm_shard': '10mm_shards',
+  // 1-inch (25.4mm) metal cube
+  '25.4mm': '25.4mm_cube',
   '1inch_cube': '25.4mm_cube',
   '1_inch_cube': '25.4mm_cube',
+  '1inch': '25.4mm_cube',
+  // 50mm metal cube
+  '50mm': '50mm_cube',
+  // Lucite (acrylic-embedded) cube — SKU convention uses "2x2"
   'lucite': 'lucite_cube',
+  '2x2': 'lucite_cube',
+  // Ampoule / ampule spelling & plural variants
   'ampoule': 'ampule',
   'ampoules': 'ampule',
   'ampules': 'ampule',

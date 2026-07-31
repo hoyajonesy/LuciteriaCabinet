@@ -12,6 +12,7 @@
     "dev:debug": "DEBUG=* remix vite:dev",
     "start": "remix-serve ./build/server/index.js",
     "start:production": "NODE_ENV=production APP_MODE=production remix-serve ./build/server/index.js",
+    "test": "node --experimental-test-module-mocks --test \"test/**/*.test.js\"",
     "lint": "echo \"No lint configured for this JavaScript project; skipping.\"",
     "typecheck": "echo \"No TypeScript configured for this JavaScript project; skipping.\"",
     "db:generate": "prisma generate",

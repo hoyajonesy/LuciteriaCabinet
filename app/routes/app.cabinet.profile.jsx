@@ -17,7 +17,7 @@ import { requireNotFrozen } from "../lib/frozen-guard.server";
 import { getFeatureFlag } from "../lib/feature-flags.server";
 import { getUnreadCount } from "../lib/notifications-db.server";
 import { ELEMENTS_118 } from "../data/elements.server";
-import { saveAvatar, AVATAR_MAX_BYTES, AVATAR_EXT_BY_MIME } from "../lib/avatar.server";
+import { applyAvatarChange, AVATAR_MAX_BYTES } from "../lib/avatar.server";
 import {
   getOrCreatePassport,
   updateProfile,
@@ -98,34 +98,10 @@ export const action = async ({ request }) => {
       return json({ avatarError: "Upload failed — the file may be too large (max 2 MB)." }, { status: 400 });
     }
 
-    const intent = form.get("intent");
-
-    if (intent === "remove-avatar") {
-      await updateProfile(userId, { avatarUrl: null });
-      return json({ avatarOk: true, message: "Avatar removed." });
-    }
-
-    // upload-avatar
-    const file = form.get("avatar");
-    if (!file || typeof file !== "object" || typeof file.arrayBuffer !== "function" || file.size === 0) {
-      return json({ avatarError: "Please choose an image to upload." }, { status: 400 });
-    }
-    const ext = AVATAR_EXT_BY_MIME[file.type];
-    if (!ext) {
-      return json({ avatarError: "Avatar must be a JPG, PNG, or WebP image." }, { status: 400 });
-    }
-    if (file.size > AVATAR_MAX_BYTES) {
-      return json({ avatarError: "Avatar must be 2 MB or smaller." }, { status: 400 });
-    }
-    try {
-      const buffer = Buffer.from(await file.arrayBuffer());
-      const avatarUrl = await saveAvatar(buffer, ext, file.type);
-      await updateProfile(userId, { avatarUrl });
-      return json({ avatarOk: true, message: "Avatar updated.", avatarUrl });
-    } catch (err) {
-      console.error("[Profile] avatar save failed:", err);
-      return json({ avatarError: "Could not save the avatar. Please try again." }, { status: 500 });
-    }
+    const { status, body } = await applyAvatarChange(form, {
+      persist: (avatarUrl) => updateProfile(userId, { avatarUrl }),
+    });
+    return json(body, { status });
   }
 
   // ── Profile text save (urlencoded) ──

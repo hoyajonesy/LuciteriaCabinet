@@ -10,7 +10,7 @@
  */
 
 import { ELEMENTS_118 } from '../data/elements.server.js';
-import { FORMATS, FORMAT_LIST, parseSizes } from './formats.js';
+import { FORMATS, FORMAT_LIST, parseSizes, normaliseFormat } from './formats.js';
 
 // Re-export the client-safe definitions for convenience
 export { FORMATS, FORMAT_LIST } from './formats.js';
@@ -29,7 +29,7 @@ export function getAvailableElementsForFormat(formatId) {
   }
 
   return ELEMENTS_118
-    .filter(el => parseSizes(el.size).includes(formatId))
+    .filter(el => parseSizes(el.size).map(normaliseFormat).includes(formatId))
     .map(el => el.sym);
 }
 
