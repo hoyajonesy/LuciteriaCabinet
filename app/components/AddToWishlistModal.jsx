@@ -41,28 +41,8 @@ export default function AddToWishlistModal({
     }
   }
 
-  // Auto-select first available format on symbol change
-  useEffect(() => {
-    if (selected) {
-      let sizes = [];
-      if (selected.size) {
-        try {
-          sizes = JSON.parse(selected.size);
-        } catch {
-          sizes = [];
-        }
-      }
-      if (sizes.length > 0) {
-        if (!sizes.includes(formFactor)) {
-          setFormFactor(sizes[0]);
-        }
-      } else {
-        setFormFactor("other");
-      }
-    }
-  }, [selectedSym]);
-
-  const canSubmit = (availableSizes.includes(formFactor) || formFactor === "other") && !submitting;
+  // Wishlist should allow all formats regardless of current Shopify availability
+  const canSubmit = !submitting;
 
   // Close after a successful add
   useEffect(() => {
@@ -160,7 +140,8 @@ export default function AddToWishlistModal({
               <div className="space-y-2">
                 {formats.map((f) => {
                   const active = formFactor === f.id;
-                  const isAvailable = availableSizes.includes(f.id) || f.id === "other";
+                  // Wishlist should allow all formats - this is aspirational, not a purchase gate
+                  const isAvailable = true;
                   
                   // Get price & stock info if available
                   const formatVariant = selected.productsByFormat?.[f.id];
