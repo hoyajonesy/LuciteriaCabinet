@@ -10,12 +10,24 @@
 import { prisma } from './db.server.js';
 import { sendEmail } from './notifications.server.js';
 
-// Notification categories and which preference fields gate them
+// Notification type constants for watchlist stock alerts.
+// Kept as named exports so webhook handlers and other callers reference
+// them symbolically rather than by raw string.
+export const WATCHLIST_BACK_IN_STOCK = 'WATCHLIST_BACK_IN_STOCK';
+export const WATCHLIST_OUT_OF_STOCK = 'WATCHLIST_OUT_OF_STOCK';
+
+// Notification categories and which preference fields gate them.
+// Watchlist categories are gated in-app by the single `watchlistAlerts`
+// preference. Their `email` gate is null because email delivery for watchlist
+// stock changes is handled directly in the inventory webhook via
+// sendWatchlistStockEmail (fire-and-forget), not through notify()'s email path.
 export const CATEGORIES = {
   MILESTONE: { inApp: 'inAppMilestone', email: 'emailMilestone', icon: '🏆' },
   NEAR_COMPLETION: { inApp: 'inAppNearCompletion', email: 'emailNearCompletion', icon: '🎯' },
   RESTOCK: { inApp: 'inAppRestock', email: 'emailRestock', icon: '🔔' },
   NEW_ARRIVAL: { inApp: 'inAppNewArrival', email: 'emailNewArrival', icon: '✨' },
+  [WATCHLIST_BACK_IN_STOCK]: { inApp: 'watchlistAlerts', email: null, icon: '🔔' },
+  [WATCHLIST_OUT_OF_STOCK]: { inApp: 'watchlistAlerts', email: null, icon: '⚠️' },
   SYSTEM: { inApp: null, email: null, icon: '⚙️' },
   ADMIN: { inApp: null, email: null, icon: '📣' },
 };

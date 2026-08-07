@@ -564,90 +564,172 @@ async function handleInventoryUpdate(payload) {
     const result = await syncSkuAvailability(product.sku, availableQty);
     logger.info(MODULE, `Inventory updated for SKU ${product.sku}: ${result?.prevQty ?? 0} -> ${availableQty}`);
 
-    // If stock went from 0 (or less) to in-stock (> 0), send restock notifications
-    const prevStock = result?.prevQty ?? 0;
-    if (prevStock <= 0 && availableQty > 0) {
+    // ─── Watchlist stock notifications ───────────────────────────
+    // Detect a stock-state transition by comparing the new quantity against
+    // Product.lastKnownInventory (the level we last notified watchlist users
+    // about). Only the in-stock <-> out-of-stock boundary is meaningful.
+    const lastKnown = product.lastKnownInventory ?? 0;
+    const backInStock = lastKnown === 0 && availableQty > 0;
+    const wentOutOfStock = lastKnown > 0 && availableQty === 0;
+
+    if (backInStock || wentOutOfStock) {
       try {
-        const wishlistEntries = await prisma.collectionItem.findMany({
-          where: {
-            elementSymbol: product.elementSymbol,
-            state: "WANTED",
-          },
-          include: {
-            user: true,
-          },
-        });
-
-        // Helper to check if product format matches wishlist choice
-        const formatMatches = (wishlistFormat, prod) => {
-          if (!wishlistFormat) return true;
-          const wish = wishlistFormat.toLowerCase();
-          const prodFmt = prod.format ? prod.format.toLowerCase() : "";
-          const prodCat = prod.category ? prod.category.toLowerCase() : "";
-          
-          if (wish === "10mm_cube") return prodFmt === "10mm";
-          if (wish === "25.4mm_cube") return prodFmt === "25.4mm";
-          if (wish === "50mm_cube") return prodFmt === "50mm" && prodCat !== "lucite cube";
-          if (wish === "lucite_cube") return prodCat === "lucite cube";
-          if (wish === "ampule" || wish === "ampoule") return prodFmt === "ampoule" || prodCat === "ampoule";
-          return true;
-        };
-
-        if (wishlistEntries.length > 0) {
-          logger.info(MODULE, `Found ${wishlistEntries.length} wishlist entries for element ${product.elementSymbol}. Sending restock alerts...`);
-          const { notify } = await import("../../lib/notifications-db.server.js");
-          
-          for (const entry of wishlistEntries) {
-            const user = entry.user;
-            if (!user) continue;
-
-            // Check if format matches
-            if (entry.format && !formatMatches(entry.format, product)) {
-              logger.info(MODULE, `Restock alert skipped for user ${user.email} due to format mismatch (${entry.format} vs product format ${product.format})`);
-              continue;
-            }
-
-            const productUrl = `/app/cabinet/shop`;
-
-            // Find corresponding Customer by email if exists, to get name or fallback details
-            const customer = await prisma.customer.findUnique({
-              where: { email: user.email }
-            });
-
-            // Trigger in-app notification + preference-aware email via notify()
-            const dedupeKey = `restock:${product.id}:${availableQty}:${Math.floor(Date.now() / (1000 * 60 * 15))}`;
-            
-            await notify(user.id, {
-              category: "RESTOCK",
-              title: `${product.title} is back in stock!`,
-              body: `${product.title} (${product.elementSymbol}) is now back in stock with ${availableQty} units available.`,
-              linkUrl: productUrl,
-              dedupeKey,
-              email: {
-                to: user.email,
-                subject: `🔔 ${product.elementSymbol} is back in stock!`,
-                template: "restock_alert",
-                data: {
-                  customerName: user.firstName || customer?.firstName || "Collector",
-                  elementSymbol: product.elementSymbol,
-                  productTitle: product.title,
-                  inventoryQty: availableQty,
-                  linkUrl: productUrl
-                }
-              }
-            });
-            logger.info(MODULE, `Restock notification successfully dispatched via notify() for user ${user.email} (SKU: ${product.sku})`);
-          }
-        }
+        await dispatchWatchlistStockAlerts(product, availableQty, backInStock);
       } catch (err) {
-        logger.error(MODULE, `Failed to send restock notifications: ${err.message}`, err);
+        logger.error(MODULE, `Failed to dispatch watchlist stock alerts: ${err.message}`, err);
       }
+    }
+
+    // Persist the new level as the checkpoint for future transition detection.
+    try {
+      await prisma.product.update({
+        where: { id: product.id },
+        data: { lastKnownInventory: availableQty },
+      });
+    } catch (err) {
+      logger.error(MODULE, `Failed to update lastKnownInventory for SKU ${product.sku}: ${err.message}`, err);
     }
 
     return { action: "inventory_updated", sku: product.sku, prevQty: result?.prevQty, newQty: availableQty };
   }
 
   return { action: "inventory_update_skipped", reason: "product_not_found" };
+}
+
+/**
+ * Check whether a product's format matches a wishlist entry's chosen format.
+ * Empty/unset wishlist format matches any product.
+ */
+function watchlistFormatMatches(wishlistFormat, prod) {
+  if (!wishlistFormat) return true;
+  const wish = wishlistFormat.toLowerCase();
+  const prodFmt = prod.format ? prod.format.toLowerCase() : "";
+  const prodCat = prod.category ? prod.category.toLowerCase() : "";
+
+  if (wish === "10mm_cube") return prodFmt === "10mm";
+  if (wish === "25.4mm_cube") return prodFmt === "25.4mm";
+  if (wish === "50mm_cube") return prodFmt === "50mm" && prodCat !== "lucite cube";
+  if (wish === "lucite_cube") return prodCat === "lucite cube";
+  if (wish === "ampule" || wish === "ampoule") return prodFmt === "ampoule" || prodCat === "ampoule";
+  return true;
+}
+
+/**
+ * Notify every user watching a product about a stock-state transition.
+ *
+ * Finds users who have the affected element on their wishlist (CollectionItem
+ * in WANTED or WATCHLIST state — the states the wishlist / periodic-table UI
+ * uses), respects each user's `watchlistAlerts` preference, writes an in-app
+ * Notification via the existing notify() helper, and fires a transactional
+ * email (fire-and-forget) so the webhook response is never blocked.
+ *
+ * @param {Object} product - The affected local Product record
+ * @param {number} availableQty - The new available quantity
+ * @param {boolean} backInStock - true = back in stock, false = went out of stock
+ */
+async function dispatchWatchlistStockAlerts(product, availableQty, backInStock) {
+  const wishlistEntries = await prisma.collectionItem.findMany({
+    where: {
+      elementSymbol: product.elementSymbol,
+      state: { in: ["WANTED", "WATCHLIST"] },
+    },
+    include: { user: true },
+  });
+
+  if (wishlistEntries.length === 0) {
+    logger.info(MODULE, `No wishlist entries for element ${product.elementSymbol}; no watchlist alerts to send.`);
+    return;
+  }
+
+  logger.info(
+    MODULE,
+    `Found ${wishlistEntries.length} wishlist entries for element ${product.elementSymbol}. Dispatching ${backInStock ? "back-in-stock" : "out-of-stock"} alerts...`
+  );
+
+  const { notify, WATCHLIST_BACK_IN_STOCK, WATCHLIST_OUT_OF_STOCK, getPreferences } =
+    await import("../../lib/notifications-db.server.js");
+  const { sendWatchlistStockEmail } = await import("../../lib/notifications.server.js");
+
+  const productUrl = product.handle
+    ? `/app/cabinet/shop?product=${encodeURIComponent(product.handle)}`
+    : `/app/cabinet/shop`;
+
+  // Fifteen-minute bucket keeps duplicate webhooks from double-notifying.
+  const bucket = Math.floor(Date.now() / (1000 * 60 * 15));
+  const category = backInStock ? WATCHLIST_BACK_IN_STOCK : WATCHLIST_OUT_OF_STOCK;
+
+  const title = backInStock
+    ? `${product.title} is back in stock!`
+    : `${product.title} is now out of stock`;
+  const body = backInStock
+    ? `${product.title} (${product.elementSymbol}) is back in stock with ${availableQty} available. Grab it before it's gone.`
+    : `${product.title} (${product.elementSymbol}) has gone out of stock. We'll let you know as soon as it's available again.`;
+
+  for (const entry of wishlistEntries) {
+    const user = entry.user;
+    if (!user) continue;
+
+    // Respect the wishlist entry's chosen format, if any.
+    if (entry.format && !watchlistFormatMatches(entry.format, product)) {
+      logger.info(MODULE, `Watchlist alert skipped for user ${user.email} (format mismatch: ${entry.format} vs ${product.format})`);
+      continue;
+    }
+
+    // Honor the user's watchlist alert preference (default on).
+    let prefs;
+    try {
+      prefs = await getPreferences(user.id);
+    } catch (err) {
+      logger.error(MODULE, `Failed to load preferences for user ${user.id}: ${err.message}`, err);
+      prefs = null;
+    }
+    if (prefs && prefs.watchlistAlerts === false) {
+      logger.info(MODULE, `Watchlist alert skipped for user ${user.email} (opted out via watchlistAlerts)`);
+      continue;
+    }
+
+    // In-app notification (gated in-app by watchlistAlerts inside notify()).
+    const dedupeKey = `watchlist:${backInStock ? "in" : "out"}:${product.id}:${bucket}`;
+    try {
+      await notify(user.id, {
+        category,
+        title,
+        body,
+        linkUrl: productUrl,
+        dedupeKey,
+      });
+      logger.info(MODULE, `Watchlist in-app notification dispatched for user ${user.email} (SKU: ${product.sku})`);
+    } catch (err) {
+      logger.error(MODULE, `Failed to create watchlist notification for user ${user.email}: ${err.message}`, err);
+    }
+
+    // Email — fire-and-forget so we never block the webhook response.
+    if (user.email) {
+      let customerName = user.firstName;
+      if (!customerName) {
+        try {
+          const customer = await prisma.customer.findUnique({ where: { email: user.email } });
+          customerName = customer?.firstName || "Collector";
+        } catch {
+          customerName = "Collector";
+        }
+      }
+
+      sendWatchlistStockEmail({
+        to: user.email,
+        backInStock,
+        elementName: product.elementName,
+        elementSymbol: product.elementSymbol,
+        productTitle: product.title,
+        inventoryQty: availableQty,
+        linkUrl: productUrl,
+        customerName,
+        customerId: user.id,
+      }).catch((err) => {
+        logger.error(MODULE, `Watchlist stock email failed for ${user.email}: ${err.message}`, err);
+      });
+    }
+  }
 }
 
 async function handleCustomerCreate(payload) {

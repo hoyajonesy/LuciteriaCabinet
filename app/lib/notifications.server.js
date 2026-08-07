@@ -156,6 +156,51 @@ The Luciteria Team
 ---
 
 This is an automated restock alert from your Luciteria Collector Cabinet wishlist.`;
+      } else if (template === 'watchlist_back_in_stock') {
+        const userName = data.customerName || 'Collector';
+        const elementName = data.elementName || data.productTitle || 'a wishlist item';
+        const productTitle = data.productTitle || elementName;
+        const qty = data.inventoryQty || 0;
+        const link = data.linkUrl || '/app/cabinet/shop';
+
+        text = `Hi ${userName},
+
+Good news! An element on your wishlist is back in stock:
+
+🔔 ${productTitle}
+
+There ${qty === 1 ? 'is' : 'are'} currently ${qty} in stock. Popular elements can sell out quickly, so don't wait too long.
+
+👉 View it in the shop: ${link}
+
+Happy Collecting,
+The Luciteria Team
+
+---
+
+This is an automated watchlist stock alert from your Luciteria Collector Cabinet. Manage these alerts in your notification preferences.`;
+      } else if (template === 'watchlist_out_of_stock') {
+        const userName = data.customerName || 'Collector';
+        const elementName = data.elementName || data.productTitle || 'a wishlist item';
+        const productTitle = data.productTitle || elementName;
+        const link = data.linkUrl || '/app/cabinet/shop';
+
+        text = `Hi ${userName},
+
+A quick heads-up: an element on your wishlist has just gone out of stock:
+
+⚠️ ${productTitle}
+
+We'll let you know the moment it's back in stock, so there's nothing you need to do.
+
+👉 View it in the shop: ${link}
+
+Happy Collecting,
+The Luciteria Team
+
+---
+
+This is an automated watchlist stock alert from your Luciteria Collector Cabinet. Manage these alerts in your notification preferences.`;
       } else if (template === 'forgot_password') {
         const userName = data.customerName || 'Collector';
         const resetLink = data.resetLink || '';
@@ -344,6 +389,62 @@ async function notifyRestockAlert(customer, product) {
   });
 }
 
+/**
+ * Send a transactional watchlist stock-change email.
+ *
+ * Fired (fire-and-forget) from the inventory webhook when a wishlisted element
+ * transitions in or out of stock. Uses the existing nodemailer transporter via
+ * sendEmail(). The caller is responsible for checking the user's watchlistAlerts
+ * preference and that a valid email address exists before invoking this.
+ *
+ * @param {Object} args
+ * @param {string} args.to - Recipient email address (required)
+ * @param {boolean} args.backInStock - true = back in stock, false = out of stock
+ * @param {string} args.elementName - Element name, e.g. "Strontium"
+ * @param {string} args.elementSymbol - Element symbol, e.g. "Sr"
+ * @param {string} args.productTitle - Product title for the subject/body
+ * @param {number} [args.inventoryQty] - Current available quantity (back-in-stock)
+ * @param {string} [args.linkUrl] - Link to the product in the cabinet shop
+ * @param {string} [args.customerName] - Recipient's first name
+ * @param {string} [args.customerId] - Local user id, for logging
+ */
+async function sendWatchlistStockEmail({
+  to,
+  backInStock,
+  elementName,
+  elementSymbol,
+  productTitle,
+  inventoryQty,
+  linkUrl,
+  customerName,
+  customerId,
+}) {
+  if (!to) {
+    console.warn("[sendWatchlistStockEmail] skipped — no recipient email");
+    return null;
+  }
+
+  const displayName = elementName || productTitle || "your wishlist item";
+  const subject = backInStock
+    ? `Back in stock: ${displayName}`
+    : `${displayName} is now out of stock`;
+
+  return sendEmail({
+    to,
+    subject,
+    template: backInStock ? "watchlist_back_in_stock" : "watchlist_out_of_stock",
+    data: {
+      customerName: customerName || "Collector",
+      elementName: displayName,
+      elementSymbol: elementSymbol || "",
+      productTitle: productTitle || displayName,
+      inventoryQty: inventoryQty ?? 0,
+      linkUrl: linkUrl || "/app/cabinet/shop",
+    },
+    customerId,
+  });
+}
+
 async function notifyPriceChange(customer, oldPrice, newPrice, effectiveDate) {
   return sendEmail({
     to: customer.email,
@@ -411,6 +512,7 @@ export {
   notifyHighDiscountAlert,
   notifyCollectionMilestone,
   notifyRestockAlert,
+  sendWatchlistStockEmail,
   notifyPriceChange,
   notifyAssignmentException,
   getNotificationLog,

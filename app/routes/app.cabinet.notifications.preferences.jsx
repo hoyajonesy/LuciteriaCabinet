@@ -35,6 +35,7 @@ export const action = async ({ request }) => {
 
   const boolField = (name) => form.get(name) === "on";
   const data = {
+    watchlistAlerts: boolField("watchlistAlerts"),
     weeklyDigest: boolField("weeklyDigest"),
     maxEmailsPerWeek: Math.max(0, Math.min(20, parseInt(form.get("maxEmailsPerWeek") || "5", 10))),
   };
@@ -83,6 +84,13 @@ export default function NotificationPreferences() {
           </div>
 
           <div style={styles.card}>
+            <div style={styles.row}>
+              <div style={{ flex: 1 }}>
+                <div style={styles.rowLabel}>Wishlist stock alerts</div>
+                <div style={styles.rowDesc}>Notify me when a wishlist item is back in stock or goes out of stock</div>
+              </div>
+              <Toggle name="watchlistAlerts" defaultChecked={pref.watchlistAlerts} wide />
+            </div>
             <div style={styles.row}>
               <div style={{ flex: 1 }}>
                 <div style={styles.rowLabel}>Weekly digest</div>

@@ -189,6 +189,7 @@ model Product {
   collectionTypes          String   @default("[]") // JSON array of collection types
   status                   String   @default("Active") // "Active", "Archived", "Draft"
   inventoryQty             Int      @default(0)
+  lastKnownInventory       Int      @default(0) // Last inventory level we notified watchlist users about (for stock-transition detection)
   priceUsd                 Float    @default(0)
   retailPrice              Float    @default(0) // Full retail price
   subscriptionCost         Float? // Cost basis for margin/discount calculation
@@ -940,6 +941,9 @@ model NotificationPreference {
   emailNearCompletion Boolean @default(false)
   emailRestock        Boolean @default(true)
   emailNewArrival     Boolean @default(false)
+
+  // Watchlist stock alerts (in-app + email) for wishlisted elements going in/out of stock
+  watchlistAlerts     Boolean @default(true)
 
   // Weekly digest of low-signal events
   weeklyDigest     Boolean   @default(true)

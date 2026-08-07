@@ -414,8 +414,15 @@ export default function WishlistPage() {
                     <div className="text-xs text-gray-400">{w.format}</div>
                   </div>
                   <div className="text-sm text-gray-700">${w.price.toFixed(2)}</div>
-                  <div>
+                  <div className="flex items-center gap-2">
                     <StockPill stock={w.stock} />
+                    {w.stock === "Out of Stock" && (
+                      <i
+                        className="fa-regular fa-bell text-gray-400 text-xs cursor-help"
+                        title="You'll be notified when this item is back in stock."
+                        aria-label="You'll be notified when this item is back in stock."
+                      />
+                    )}
                   </div>
                   <div>
                     <select
