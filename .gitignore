@@ -9,3 +9,4 @@ node_modules/
 
 # Local test env (VM Postgres creds)
 .env.test
+.abacus.donotdelete

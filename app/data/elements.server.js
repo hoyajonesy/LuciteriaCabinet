@@ -20,8 +20,23 @@
 
 import { CANONICAL_ELEMENTS } from "./periodic-canonical";
 import { buildElements118 } from "./elements-transform.server.js";
+import { buildElements118FromDbRows } from "./elements-db.server.js";
+import { prisma } from "../lib/db.server.js";
 
 export { buildElements118 };
+
+/**
+ * Build the canonical element catalog from the Prisma `Product` table.
+ *
+ * This is the source of truth for ELEMENTS_118 (replacing the older live
+ * Shopify `periodic_size` metafield fetch, which was unreliable — see
+ * elements-db.server.js for the rationale). The `Product` table is synced from
+ * Shopify by the inventory/product webhooks, so it stays fresh.
+ */
+async function buildElements118FromDb() {
+  const rows = await prisma.product.findMany();
+  return buildElements118FromDbRows(rows);
+}
 
 
 async function fetchElements118() {
@@ -189,7 +204,7 @@ function backfillCanonicalElements(fetched) {
   return Array.from(byZ.values()).sort((a, b) => a.z - b.z);
 }
 
-const ELEMENTS_118 = backfillCanonicalElements(await fetchElements118());
+const ELEMENTS_118 = backfillCanonicalElements(await buildElements118FromDb());
 
 
 

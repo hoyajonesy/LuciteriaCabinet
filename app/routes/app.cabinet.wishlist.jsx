@@ -19,7 +19,7 @@ import {
 } from "../lib/collection.server";
 import { getUnreadCount } from "../lib/notifications-db.server";
 import { ELEMENTS_118 } from "../data/elements.server";
-import { FORMATS, FORMAT_LIST, parseSizes } from "../lib/formats";
+import { FORMATS, FORMAT_LIST, parseSizes, normaliseFormat } from "../lib/formats";
 import { prisma } from "../lib/db.server";
 
 
@@ -46,10 +46,15 @@ export const loader = async ({ request }) => {
     const el = ELEMENTS_118.find((e) => e.sym === it.elementSymbol);
     let variant = null;
 
-    if (it.format && el?.productsByFormat?.[it.format]) {
-      variant = el.productsByFormat[it.format];
-    } else if (preferredFormat && el?.productsByFormat?.[preferredFormat]) {
-      variant = el.productsByFormat[preferredFormat];
+    // Stored formats can be canonical ("10mm_cube"), raw ("lucite"), or null —
+    // normalise before indexing productsByFormat so the correct SKU (and thus
+    // the correct price/stock) is resolved.
+    const itemFmtId = normaliseFormat(it.format);
+    const preferredFmtId = normaliseFormat(preferredFormat);
+    if (itemFmtId && el?.productsByFormat?.[itemFmtId]) {
+      variant = el.productsByFormat[itemFmtId];
+    } else if (preferredFmtId && el?.productsByFormat?.[preferredFmtId]) {
+      variant = el.productsByFormat[preferredFmtId];
     } else if (el?.products && el.products.length > 0) {
       variant = el.products[0];
     }
@@ -66,8 +71,8 @@ export const loader = async ({ request }) => {
     const displayName = variant?.title || it.elementName;
 
     let fmt = "No format chosen";
-    if (it.format && FORMATS[it.format]) {
-      fmt = FORMATS[it.format].name;
+    if (itemFmtId && FORMATS[itemFmtId]) {
+      fmt = FORMATS[itemFmtId].name;
     } else if (variant?.variantTitle && variant.variantTitle !== "Default Title") {
       fmt = variant.variantTitle;
     } else if (variant?.size) {
