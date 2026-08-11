@@ -149,7 +149,13 @@ export default function AddToWishlistModal({
                   const available = formatVariant?.availableForSale;
                   const qty = formatVariant?.inventoryQty;
                   
-                  const stockStatus = !formatVariant ? "Out of Stock" : !available ? "Out of Stock" : (qty > 0 && qty <= 5) ? "Low Stock" : "In Stock";
+                  const stockStatus = !formatVariant 
+                    ? "Out of Stock" 
+                    : !available || qty === 0 || qty === null || qty === undefined
+                    ? "Out of Stock" 
+                    : qty <= 5 
+                    ? "Low Stock" 
+                    : "In Stock";
                   
                   let labelClass = "";
                   if (!isAvailable) {
