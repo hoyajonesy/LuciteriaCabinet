@@ -26,23 +26,58 @@ import { normaliseFormat } from "../lib/formats.js";
 const CANONICAL_BY_Z = new Map(CANONICAL_ELEMENTS.map((c) => [c.z, c]));
 
 /**
- * Derive the canonical format id for a DB product row.
- * Uses the first token of the `collectionTypes` JSON array, falling back to the
- * raw `format` column, then normalises via normaliseFormat (e.g. "10mm" →
- * "10mm_cube", "lucite" → "lucite_cube", "ampoules" → "ampule").
+ * Derive the canonical format id for a DB product row using SKU suffix
+ * matching. The DB `format` and `collectionTypes` fields are often mis-tagged
+ * in Shopify, so SKU suffixes are the source of truth.
+ *
+ * Rules (confirmed by user):
+ * - 10mm Cube: ends in `10mm` (excludes `10.1mm`, `10mm_sg`, `10mm_mp`)
+ * - 10mm Box (Shards/Flakes): ends in `10mm_sg`, `10.1mm`, `10.1mm_0.1g`, `10.1mm_1g`
+ * - 1-inch Cube (25.4mm): ends in `25.4mm` (excludes `25.4mm_mp`)
+ * - 50mm Cube: ends in `50mm` (excludes `50mm_mp`)
+ * - Lucite Cube: ends in `2x2`
+ * - Ampoule: ends in `15x60mm` or ampoule-related suffixes
+ * - Other: everything else (including `_mp` mirror-polished variants)
  */
 function canonicalFormatForRow(row) {
-  let token = null;
-  if (row.collectionTypes) {
-    try {
-      const parsed = JSON.parse(row.collectionTypes);
-      if (Array.isArray(parsed) && parsed.length > 0) token = parsed[0];
-    } catch {
-      token = null;
-    }
+  const sku = (row.sku || "").toLowerCase();
+  if (!sku) return null;
+
+  // 10mm Box (Shards/Flakes) — must check BEFORE 10mm Cube to avoid overlap
+  if (sku.endsWith("10mm_sg") || sku.endsWith("10.1mm") || 
+      sku.endsWith("10.1mm_0.1g") || sku.endsWith("10.1mm_1g")) {
+    return "10mm_shards";
   }
-  if (!token) token = row.format || null;
-  return normaliseFormat(token);
+
+  // 10mm Cube — ends in `10mm` but NOT `10.1mm`, `10mm_sg`, `10mm_mp`
+  if (sku.endsWith("10mm")) {
+    return "10mm_cube";
+  }
+
+  // 1-inch Cube (25.4mm) — ends in `25.4mm` but NOT `25.4mm_mp`
+  if (sku.endsWith("25.4mm")) {
+    return "25.4mm_cube";
+  }
+
+  // 50mm Cube — ends in `50mm` but NOT `50mm_mp`
+  if (sku.endsWith("50mm")) {
+    return "50mm_cube";
+  }
+
+  // Lucite Cube — ends in `2x2`
+  if (sku.endsWith("2x2")) {
+    return "lucite_cube";
+  }
+
+  // Ampoule — `15x60mm` and ampoule-related suffixes
+  if (sku.includes("15x60mm") || sku.includes("_amp") || 
+      sku.endsWith("_bot") || sku.endsWith("_bar") || 
+      sku.includes("_bead") || sku.includes("_den")) {
+    return "ampule";
+  }
+
+  // Everything else (including `_mp`, `_film`, `_cry`, etc.) → "other"
+  return "other";
 }
 
 /** Build the per-variant productData object consumed by the shop/wishlist. */

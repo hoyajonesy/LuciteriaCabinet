@@ -415,7 +415,14 @@ export default function WishlistPage() {
                     {w.symbol}
                   </div>
                   <div>
-                    <div className="text-sm font-medium text-gray-800">{w.name}</div>
+                    <a
+                      href={productUrlForShopProduct({ handle: w.productHandle, variantId: w.variantId }, w.name)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm font-medium text-gray-800 hover:text-luc-blue hover:underline"
+                    >
+                      {w.name}
+                    </a>
                     <div className="text-xs text-gray-400">{w.format}</div>
                   </div>
                   <div className="text-sm text-gray-700">${w.price.toFixed(2)}</div>
