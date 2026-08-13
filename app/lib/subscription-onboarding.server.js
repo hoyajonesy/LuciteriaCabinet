@@ -274,3 +274,213 @@ export async function completeOnboarding({ userId, contractId, confirmations = [
 
   return { onboarding: updated, confirmedCount, rejectedCount };
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Write an ActivityLog entry for an onboarding lifecycle event. Best-effort:
+ * logging failures must never abort the grace job. Staff attribution (if any)
+ * is carried in the details JSON since ActivityLog has no separate staff FK.
+ */
+async function logOnboardingActivity(userId, action, details) {
+  try {
+    await prisma.activityLog.create({
+      data: {
+        userId,
+        action,
+        details: JSON.stringify(details || {}),
+      },
+    });
+  } catch (e) {
+    logger.warn(MODULE, `ActivityLog write failed (${action}): ${e.message}`);
+  }
+}
+
+/**
+ * Build a fresh magic-link onboarding URL for a subscriber. Mints a new token
+ * (the previous one may have expired) bound to the same contract.
+ */
+async function buildOnboardingLink(userId, subscriptionContractId, formatTrack) {
+  const origin = originFromRequest(null);
+  try {
+    const { rawToken } = await createOnboardingToken(userId, subscriptionContractId);
+    if (rawToken) {
+      return `${origin}/onboarding/subscription/${rawToken}?contract=${encodeURIComponent(subscriptionContractId)}`;
+    }
+  } catch (e) {
+    logger.warn(MODULE, `Token mint failed for user ${userId}: ${e.message}`);
+  }
+  return `${origin}/onboarding/subscription`;
+}
+
+/**
+ * Grace-window automation job (FR-22, FR-24, Section 10).
+ *
+ * Prototype note: this would run as a scheduled cron in production. It is an
+ * admin-triggerable batch function (mirrors credits.server.js/grantAllMonthlyCredits).
+ *
+ * For every PENDING onboarding it:
+ *  - Transitions PENDING → BACKSTOP_ONLY once the grace window has expired,
+ *    sends the transparency notice (FR-24), and logs the transition.
+ *  - Otherwise sends the due reminder — the final-notice (≤24h remaining) takes
+ *    precedence over the midpoint reminder (≤grace/2 remaining).
+ *  - Increments remindersSent idempotently so re-runs never re-send, and no
+ *    reminders are ever sent once status leaves PENDING (FR-22).
+ *
+ * @param {Object} [opts]
+ * @param {Date}   [opts.now] - Injectable clock for testing.
+ * @returns {Promise<{scanned:number, reminder1:number, reminder2:number, backstop:number, errors:number}>}
+ */
+export async function runOnboardingGraceJob({ now = new Date() } = {}) {
+  const nowMs = now.getTime();
+  const halfWindowMs = (GRACE_WINDOW_DAYS * DAY_MS) / 2;
+
+  const pending = await prisma.subscriptionOnboarding.findMany({
+    where: { status: ONBOARDING_STATUS.PENDING },
+    include: { user: true },
+  });
+
+  const summary = { scanned: pending.length, reminder1: 0, reminder2: 0, backstop: 0, errors: 0 };
+
+  for (const ob of pending) {
+    const user = ob.user;
+    if (!user || !user.email) {
+      logger.warn(MODULE, `Skipping onboarding ${ob.id}: no user/email`);
+      continue;
+    }
+
+    const customerName = user.firstName || user.name || "Collector";
+    const label = formatLabel(ob.formatTrack) || ob.formatTrack;
+    const graceMs = ob.graceExpiresAt.getTime();
+
+    try {
+      // --- Grace expired → BACKSTOP_ONLY transition + transparency notice (FR-24). ---
+      if (nowMs >= graceMs) {
+        const updated = await prisma.subscriptionOnboarding.update({
+          where: { id: ob.id },
+          data: { status: ONBOARDING_STATUS.BACKSTOP_ONLY },
+        });
+        const linkUrl = await buildOnboardingLink(user.id, ob.subscriptionContractId, ob.formatTrack);
+        await sendEmail({
+          to: user.email,
+          subject: "Your Luciteria subscription has resumed automatic selection",
+          template: "subscription_onboarding_backstop",
+          data: { customerName, linkUrl, formatLabel: label },
+          customerId: user.id,
+        });
+        await logOnboardingActivity(user.id, "onboarding_backstop_fallback", {
+          onboardingId: ob.id,
+          contractId: ob.subscriptionContractId,
+          from: ONBOARDING_STATUS.PENDING,
+          to: ONBOARDING_STATUS.BACKSTOP_ONLY,
+          remindersSent: updated.remindersSent,
+          reason: "grace_window_expired",
+        });
+        logger.info(MODULE, `Contract ${ob.subscriptionContractId} → BACKSTOP_ONLY (grace expired)`);
+        summary.backstop++;
+        continue;
+      }
+
+      // --- Final notice: ≤24h remaining, at most once (remindersSent < 2). ---
+      if (nowMs >= graceMs - DAY_MS) {
+        if (ob.remindersSent < 2) {
+          const linkUrl = await buildOnboardingLink(user.id, ob.subscriptionContractId, ob.formatTrack);
+          await sendEmail({
+            to: user.email,
+            subject: "Last call: confirm the elements you own",
+            template: "subscription_onboarding_final_notice",
+            data: { customerName, linkUrl, formatLabel: label },
+            customerId: user.id,
+          });
+          await prisma.subscriptionOnboarding.update({
+            where: { id: ob.id },
+            data: { remindersSent: 2 },
+          });
+          await logOnboardingActivity(user.id, "onboarding_reminder_sent", {
+            onboardingId: ob.id,
+            contractId: ob.subscriptionContractId,
+            reminder: "final_notice",
+            remindersSent: 2,
+          });
+          logger.info(MODULE, `Final notice sent for contract ${ob.subscriptionContractId}`);
+          summary.reminder2++;
+        }
+        continue;
+      }
+
+      // --- Midpoint reminder: ≤grace/2 remaining, at most once (remindersSent < 1). ---
+      if (nowMs >= graceMs - halfWindowMs) {
+        if (ob.remindersSent < 1) {
+          const linkUrl = await buildOnboardingLink(user.id, ob.subscriptionContractId, ob.formatTrack);
+          const daysLeft = Math.max(0, Math.ceil((graceMs - nowMs) / DAY_MS));
+          await sendEmail({
+            to: user.email,
+            subject: "Reminder: tell us which elements you already own",
+            template: "subscription_onboarding_reminder",
+            data: { customerName, linkUrl, formatLabel: label, daysLeft },
+            customerId: user.id,
+          });
+          await prisma.subscriptionOnboarding.update({
+            where: { id: ob.id },
+            data: { remindersSent: 1 },
+          });
+          await logOnboardingActivity(user.id, "onboarding_reminder_sent", {
+            onboardingId: ob.id,
+            contractId: ob.subscriptionContractId,
+            reminder: "midpoint",
+            remindersSent: 1,
+          });
+          logger.info(MODULE, `Midpoint reminder sent for contract ${ob.subscriptionContractId}`);
+          summary.reminder1++;
+        }
+        continue;
+      }
+    } catch (e) {
+      summary.errors++;
+      logger.error(MODULE, `Grace job failed for onboarding ${ob.id}: ${e.message}`);
+    }
+  }
+
+  logger.info(MODULE, "Grace job complete", summary);
+  return summary;
+}
+
+/**
+ * Admin-triggered manual completion of an onboarding record (FR-28).
+ * Sets status COMPLETE + completedAt, records staff attribution to ActivityLog.
+ *
+ * @param {Object} params
+ * @param {string} params.onboardingId
+ * @param {Object} params.staff - Admin object from requireAdmin ({ id, email, name }).
+ * @returns {Promise<object>} the updated onboarding record
+ */
+export async function markOnboardingCompleteByAdmin({ onboardingId, staff }) {
+  const onboarding = await prisma.subscriptionOnboarding.findUnique({
+    where: { id: onboardingId },
+  });
+  if (!onboarding) {
+    throw new Error(`No onboarding record ${onboardingId}`);
+  }
+
+  const from = onboarding.status;
+  const updated = await prisma.subscriptionOnboarding.update({
+    where: { id: onboardingId },
+    data: {
+      status: ONBOARDING_STATUS.COMPLETE,
+      completedAt: onboarding.completedAt || new Date(),
+    },
+  });
+
+  await logOnboardingActivity(onboarding.userId, "onboarding_marked_complete", {
+    onboardingId,
+    contractId: onboarding.subscriptionContractId,
+    from,
+    to: ONBOARDING_STATUS.COMPLETE,
+    staffId: staff?.id || null,
+    staffEmail: staff?.email || null,
+    staffName: staff?.name || null,
+  });
+
+  logger.info(MODULE, `Onboarding ${onboardingId} marked COMPLETE by admin ${staff?.email || "unknown"}`);
+  return updated;
+}

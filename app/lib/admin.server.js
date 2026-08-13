@@ -133,22 +133,33 @@ export async function getAllUsersWithCollectionStats() {
         take: 1,
         select: { createdAt: true },
       },
+      subscriptionOnboardings: {
+        orderBy: { createdAt: 'desc' },
+        select: { status: true },
+      },
     },
     orderBy: { createdAt: 'desc' },
   });
 
-  return users.map(u => ({
-    id: u.id,
-    firstName: u.firstName,
-    lastName: u.lastName,
-    email: u.email,
-    isStaff: u.isStaff,
-    userType: u.userType,
-    elementsOwned: u.collectionItems.length,
-    completionPercent: Math.round((u.collectionItems.length / TOTAL_ELEMENTS) * 100),
-    lastActivity: u.activityLogs[0]?.createdAt?.toISOString() || null,
-    joinDate: u.createdAt.toISOString(),
-  }));
+  return users.map(u => {
+    // Surface the most recent onboarding's status for list filtering (FR-27).
+    const onboardings = u.subscriptionOnboardings || [];
+    const onboardingStatus = onboardings.length > 0 ? onboardings[0].status : null;
+    return {
+      id: u.id,
+      firstName: u.firstName,
+      lastName: u.lastName,
+      email: u.email,
+      isStaff: u.isStaff,
+      userType: u.userType,
+      elementsOwned: u.collectionItems.length,
+      completionPercent: Math.round((u.collectionItems.length / TOTAL_ELEMENTS) * 100),
+      lastActivity: u.activityLogs[0]?.createdAt?.toISOString() || null,
+      joinDate: u.createdAt.toISOString(),
+      onboardingStatus,
+      onboardingCount: onboardings.length,
+    };
+  });
 }
 
 // ─── User Collection Detail ────────────────────────────────────
@@ -190,6 +201,48 @@ export async function getUserCollectionDetail(userId) {
     take: 20,
   });
 
+  // ─── Subscription onboarding records + ownership provenance (FR-26) ───
+  const onboardingRecords = await prisma.subscriptionOnboarding.findMany({
+    where: { userId },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  const now = Date.now();
+  const subscriptionOnboardings = onboardingRecords.map(ob => {
+    // Ownership records that originated from this onboarding contract (FR-3/4).
+    const provenanceItems = items
+      .filter(i => i.sourceSubscriptionContractId === ob.subscriptionContractId)
+      .map(i => ({
+        elementSymbol: i.elementSymbol,
+        elementName: i.elementName,
+        format: i.format,
+        state: i.state,
+        ownershipSource: i.ownershipSource,
+        subscriberConfirmed: i.subscriberConfirmed,
+        rejectedBySubscriber: i.rejectedBySubscriber,
+        recordedAt: i.recordedAt ? i.recordedAt.toISOString() : null,
+      }));
+
+    const graceRemainingSeconds =
+      ob.status === 'PENDING' && ob.graceExpiresAt
+        ? Math.max(0, Math.floor((ob.graceExpiresAt.getTime() - now) / 1000))
+        : null;
+
+    return {
+      id: ob.id,
+      subscriptionContractId: ob.subscriptionContractId,
+      formatTrack: ob.formatTrack,
+      status: ob.status,
+      seededFromOrderHistory: ob.seededFromOrderHistory,
+      remindersSent: ob.remindersSent,
+      graceExpiresAt: ob.graceExpiresAt ? ob.graceExpiresAt.toISOString() : null,
+      graceRemainingSeconds,
+      completedAt: ob.completedAt ? ob.completedAt.toISOString() : null,
+      createdAt: ob.createdAt.toISOString(),
+      provenanceItems,
+    };
+  });
+
   // Build state map
   const stateMap = {};
   for (const item of items) {
@@ -220,6 +273,7 @@ export async function getUserCollectionDetail(userId) {
       ...a,
       createdAt: a.createdAt.toISOString(),
     })),
+    subscriptionOnboardings,
   };
 }
 

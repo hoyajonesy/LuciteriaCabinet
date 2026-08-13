@@ -30,21 +30,68 @@ export const action = async ({ request }) => {
   return json({ ok: true });
 };
 
+const ONBOARDING_FILTERS = [
+  { value: "ALL", label: "All onboarding" },
+  { value: "PENDING", label: "Pending" },
+  { value: "BACKSTOP_ONLY", label: "Backstop only" },
+  { value: "COMPLETE", label: "Complete" },
+  { value: "NONE", label: "No subscription" },
+];
+
+// Sort weight so PENDING (needs attention) and BACKSTOP_ONLY float to the top.
+const ONBOARDING_SORT_WEIGHT = { PENDING: 0, BACKSTOP_ONLY: 1, COMPLETE: 2 };
+
+function onboardingBadgeStyle(status) {
+  const base = {
+    display: 'inline-block',
+    fontSize: 10,
+    fontWeight: 700,
+    padding: '2px 8px',
+    borderRadius: 8,
+    textTransform: 'uppercase',
+    letterSpacing: '0.03em',
+    whiteSpace: 'nowrap',
+  };
+  if (status === 'COMPLETE') return { ...base, background: '#dcfce7', color: '#059669' };
+  if (status === 'BACKSTOP_ONLY') return { ...base, background: '#fee2e2', color: '#dc2626' };
+  if (status === 'PENDING') return { ...base, background: '#fef3c7', color: '#b45309' };
+  return { ...base, background: '#f3f4f6', color: '#999' };
+}
+
 export default function AdminUsers() {
   const { users } = useLoaderData();
   const [search, setSearch] = useState("");
+  const [onboardingFilter, setOnboardingFilter] = useState("ALL");
+  const [sortByOnboarding, setSortByOnboarding] = useState(false);
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 25;
 
-  const filtered = users.filter(u => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return (
-      u.firstName.toLowerCase().includes(q) ||
-      u.lastName.toLowerCase().includes(q) ||
-      u.email.toLowerCase().includes(q)
-    );
+  let filtered = users.filter(u => {
+    if (search) {
+      const q = search.toLowerCase();
+      const matches =
+        u.firstName.toLowerCase().includes(q) ||
+        u.lastName.toLowerCase().includes(q) ||
+        u.email.toLowerCase().includes(q);
+      if (!matches) return false;
+    }
+    if (onboardingFilter !== "ALL") {
+      if (onboardingFilter === "NONE") {
+        if (u.onboardingStatus) return false;
+      } else if (u.onboardingStatus !== onboardingFilter) {
+        return false;
+      }
+    }
+    return true;
   });
+
+  if (sortByOnboarding) {
+    filtered = [...filtered].sort((a, b) => {
+      const wa = a.onboardingStatus ? ONBOARDING_SORT_WEIGHT[a.onboardingStatus] ?? 3 : 4;
+      const wb = b.onboardingStatus ? ONBOARDING_SORT_WEIGHT[b.onboardingStatus] ?? 3 : 4;
+      return wa - wb;
+    });
+  }
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const paged = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -66,6 +113,16 @@ export default function AdminUsers() {
             <button onClick={() => setSearch("")} style={styles.clearBtn}>✕</button>
           )}
         </div>
+        <select
+          value={onboardingFilter}
+          onChange={e => { setOnboardingFilter(e.target.value); setPage(0); }}
+          style={styles.filterSelect}
+          aria-label="Filter by onboarding status"
+        >
+          {ONBOARDING_FILTERS.map(f => (
+            <option key={f.value} value={f.value}>{f.label}</option>
+          ))}
+        </select>
         <div style={styles.toolbarRight}>
           <span style={styles.countLabel}>{filtered.length} user{filtered.length !== 1 ? 's' : ''}</span>
           <form method="post" style={{ display: 'inline' }}>
@@ -90,6 +147,13 @@ export default function AdminUsers() {
                   <th style={styles.th}>Email</th>
                   <th style={{ ...styles.th, textAlign: 'center' }}>Elements</th>
                   <th style={{ ...styles.th, textAlign: 'center' }}>Completion</th>
+                  <th
+                    style={{ ...styles.th, textAlign: 'center', cursor: 'pointer', userSelect: 'none' }}
+                    onClick={() => setSortByOnboarding(v => !v)}
+                    title="Click to sort by onboarding status"
+                  >
+                    Onboarding {sortByOnboarding ? '▲' : '⇅'}
+                  </th>
                   <th style={styles.th}>Last Activity</th>
                   <th style={{ ...styles.th, textAlign: 'center' }}>Actions</th>
                 </tr>
@@ -118,6 +182,15 @@ export default function AdminUsers() {
                         </div>
                         <span style={styles.pctLabel}>{u.completionPercent}%</span>
                       </div>
+                    </td>
+                    <td style={{ ...styles.td, textAlign: 'center' }}>
+                      {u.onboardingStatus ? (
+                        <span style={onboardingBadgeStyle(u.onboardingStatus)}>
+                          {u.onboardingStatus === 'BACKSTOP_ONLY' ? 'BACKSTOP' : u.onboardingStatus}
+                        </span>
+                      ) : (
+                        <span style={styles.noActivity}>—</span>
+                      )}
                     </td>
                     <td style={styles.td}>
                       {u.lastActivity ? (
@@ -207,6 +280,15 @@ const styles = {
     fontSize: 14,
     color: '#999',
     padding: '2px 4px',
+  },
+  filterSelect: {
+    padding: '8px 12px',
+    borderRadius: 8,
+    border: '1px solid var(--luc-border, #e0e0e0)',
+    background: '#fff',
+    fontSize: 13,
+    color: 'var(--luc-text, #1a1a1a)',
+    cursor: 'pointer',
   },
   toolbarRight: {
     display: 'flex',

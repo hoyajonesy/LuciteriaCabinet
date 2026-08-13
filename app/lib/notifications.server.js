@@ -247,6 +247,75 @@ The Luciteria Team
 ---
 
 This is an automated notification. Please do not reply to this email.`;
+      } else if (template === 'subscription_onboarding_reminder') {
+        const userName = data.customerName || 'Collector';
+        const linkUrl = data.linkUrl || '';
+        const formatLabel = data.formatLabel || 'your collection';
+        const daysLeft = data.daysLeft;
+        const heldItem = data.heldItem || '';
+
+        text = `Hi ${userName},
+
+Just a friendly reminder about your Luciteria element subscription. 🧪
+
+We're holding your next shipment${heldItem ? ` (currently lined up: ${heldItem})` : ''} while we wait to hear which elements you already own in ${formatLabel}. Confirming takes about a minute and helps us make sure every shipment adds something new to your collection.
+
+👉 Confirm the elements you already own here:
+${linkUrl}
+${typeof daysLeft === 'number' ? `
+You have about ${daysLeft} day${daysLeft === 1 ? '' : 's'} left before we start selecting automatically.
+` : ''}
+If we don't hear from you, we'll keep sending elements as usual — confirming just helps us avoid duplicates.
+
+Happy Collecting,
+The Luciteria Team
+
+---
+
+This is an automated notification. Please do not reply to this email.`;
+      } else if (template === 'subscription_onboarding_final_notice') {
+        const userName = data.customerName || 'Collector';
+        const linkUrl = data.linkUrl || '';
+        const formatLabel = data.formatLabel || 'your collection';
+
+        text = `Hi ${userName},
+
+Last call! ⏳ Your Luciteria subscription is about to resume automatic selection.
+
+We still haven't heard which elements you already own in ${formatLabel}. If you'd like to help us avoid sending duplicates, please confirm your owned elements within the next 24 hours:
+
+👉 ${linkUrl}
+
+After that, we'll go ahead and select your next element automatically so your shipments keep flowing. You can still update your owned elements any time from your cabinet.
+
+Happy Collecting,
+The Luciteria Team
+
+---
+
+This is an automated notification. Please do not reply to this email.`;
+      } else if (template === 'subscription_onboarding_backstop') {
+        const userName = data.customerName || 'Collector';
+        const linkUrl = data.linkUrl || '';
+        const formatLabel = data.formatLabel || 'your collection';
+
+        text = `Hi ${userName},
+
+A quick heads-up about your Luciteria element subscription. 📦
+
+Since we didn't hear back about which elements you already own in ${formatLabel}, we've resumed automatic selection so your shipments keep arriving on schedule. To be transparent: we'll only skip elements you've explicitly told us you own, so there's a small chance an upcoming pick duplicates something already in your collection.
+
+You can prevent that at any time by updating your owned elements here:
+👉 ${linkUrl}
+
+If a shipment does duplicate something you own, just reply to your shipment notification and we'll arrange a swap.
+
+Happy Collecting,
+The Luciteria Team
+
+---
+
+This is an automated notification. Please do not reply to this email.`;
       } else {
         // Fallback for other templates
         text = `Hi ${data.customerName || 'Collector'},\n\n`;

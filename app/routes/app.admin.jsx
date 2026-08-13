@@ -30,6 +30,7 @@ export const loader = async ({ request }) => {
 const ADMIN_TABS = [
   { label: "Overview", path: "/app/admin", icon: "📊" },
   { label: "Users", path: "/app/admin/users", icon: "👥" },
+  { label: "Onboarding", path: "/app/admin/onboarding", icon: "🧪" },
   { label: "Demand", path: "/app/admin/demand", icon: "🔥" },
   { label: "Analytics", path: "/app/admin/analytics", icon: "📈" },
 ];

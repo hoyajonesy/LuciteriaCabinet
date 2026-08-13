@@ -8,12 +8,41 @@ import { useLoaderData, Link, Form, useActionData } from "@remix-run/react";
 import { getUserCollectionDetail, requireAdmin } from "../lib/admin.server.js";
 import { prisma } from "../lib/db.server.js";
 import { unpublishPassport } from "../lib/passport.server.js";
+import { markOnboardingCompleteByAdmin } from "../lib/subscription-onboarding.server.js";
 import { ELEMENTS_118 } from "../data/elements.server.js";
 import PeriodicTable from "../components/PeriodicTable.jsx";
 import ProgressBar from "../components/ProgressBar.jsx";
 import MetricCard from "../components/admin/MetricCard.jsx";
 
 const PUBLIC_BASE = "https://cabinet.luciteria.com/p/";
+
+/** Human-readable grace-window remaining time. */
+function formatGrace(seconds) {
+  if (seconds == null) return "";
+  if (seconds <= 0) return "expired";
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  if (days > 0) return `${days}d ${hours}h left`;
+  const mins = Math.floor((seconds % 3600) / 60);
+  if (hours > 0) return `${hours}h ${mins}m left`;
+  return `${mins}m left`;
+}
+
+/** Status badge coloring for onboarding status. */
+function onboardingBadgeStyle(status) {
+  const base = {
+    display: 'inline-block',
+    fontSize: 11,
+    fontWeight: 700,
+    padding: '2px 10px',
+    borderRadius: 8,
+    textTransform: 'uppercase',
+    letterSpacing: '0.03em',
+  };
+  if (status === 'COMPLETE') return { ...base, background: '#dcfce7', color: '#059669' };
+  if (status === 'BACKSTOP_ONLY') return { ...base, background: '#fee2e2', color: '#dc2626' };
+  return { ...base, background: '#fef3c7', color: '#b45309' }; // PENDING
+}
 
 export const loader = async ({ params }) => {
   const detail = await getUserCollectionDetail(params.userId);
@@ -48,7 +77,7 @@ export const loader = async ({ params }) => {
 
 export const action = async ({ request, params }) => {
   // Staff-only guard (this route is also wrapped by the admin layout).
-  await requireAdmin(request);
+  const admin = await requireAdmin(request);
 
   const form = await request.formData();
   const intent = form.get("intent");
@@ -58,11 +87,31 @@ export const action = async ({ request, params }) => {
     return json({ ok: true, message: "Passport unpublished." });
   }
 
+  if (intent === "mark-onboarding-complete") {
+    const onboardingId = form.get("onboardingId");
+    if (!onboardingId) {
+      return json({ error: "Missing onboarding id." }, { status: 400 });
+    }
+    try {
+      const staffName =
+        admin.name ||
+        [admin.firstName, admin.lastName].filter(Boolean).join(" ").trim() ||
+        admin.email;
+      await markOnboardingCompleteByAdmin({
+        onboardingId: String(onboardingId),
+        staff: { id: admin.id, email: admin.email, name: staffName },
+      });
+      return json({ ok: true, message: "Onboarding marked complete." });
+    } catch (e) {
+      return json({ error: e.message || "Failed to mark complete." }, { status: 400 });
+    }
+  }
+
   return json({ error: "Unknown action." }, { status: 400 });
 };
 
 export default function AdminUserDetail() {
-  const { user, stats, collectionStates, items, milestones, goals, recentActivity, elements, passport } = useLoaderData();
+  const { user, stats, collectionStates, items, milestones, goals, recentActivity, elements, passport, subscriptionOnboardings } = useLoaderData();
   const actionData = useActionData();
 
   return (
@@ -158,6 +207,92 @@ export default function AdminUserDetail() {
           )}
         </div>
       </div>
+
+      {/* ─── Subscription Onboarding (FR-26) ─── */}
+      {subscriptionOnboardings && subscriptionOnboardings.length > 0 && (
+        <div style={styles.card}>
+          <div style={styles.cardHeader}>
+            <h3 style={styles.cardTitle}>🧪 Subscription Onboarding</h3>
+          </div>
+          <div style={styles.cardBody}>
+            {subscriptionOnboardings.map(ob => (
+              <div key={ob.id} style={styles.onboardingBlock}>
+                <div style={styles.onboardingTop}>
+                  <span style={onboardingBadgeStyle(ob.status)}>{ob.status}</span>
+                  <span style={styles.contractId}>Contract {ob.subscriptionContractId}</span>
+                  <span style={styles.formatBadge}>{ob.formatTrack}</span>
+                </div>
+
+                <div style={styles.onboardingMeta}>
+                  <div style={styles.metaCell}>
+                    <div style={styles.metaLabel}>Seeded from order history</div>
+                    <div style={styles.metaValue}>{ob.seededFromOrderHistory ? "Yes" : "No"}</div>
+                  </div>
+                  <div style={styles.metaCell}>
+                    <div style={styles.metaLabel}>Reminders sent</div>
+                    <div style={styles.metaValue}>{ob.remindersSent} / 2</div>
+                  </div>
+                  <div style={styles.metaCell}>
+                    <div style={styles.metaLabel}>Grace expires</div>
+                    <div style={styles.metaValue}>
+                      {ob.graceExpiresAt
+                        ? new Date(ob.graceExpiresAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+                        : "—"}
+                      {ob.status === 'PENDING' && ob.graceRemainingSeconds != null && (
+                        <span style={styles.graceRemaining}> · {formatGrace(ob.graceRemainingSeconds)}</span>
+                      )}
+                    </div>
+                  </div>
+                  <div style={styles.metaCell}>
+                    <div style={styles.metaLabel}>Completed</div>
+                    <div style={styles.metaValue}>
+                      {ob.completedAt
+                        ? new Date(ob.completedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                        : "—"}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Ownership-record provenance from this onboarding (FR-3/4) */}
+                <div style={styles.provenanceWrap}>
+                  <div style={styles.metaLabel}>Ownership records from this onboarding</div>
+                  {ob.provenanceItems.length === 0 ? (
+                    <div style={styles.provenanceEmpty}>No confirmed or rejected records yet.</div>
+                  ) : (
+                    <div style={styles.provenanceList}>
+                      {ob.provenanceItems.map(p => (
+                        <div key={`${ob.id}-${p.elementSymbol}`} style={styles.provenanceRow}>
+                          <span style={styles.symbol}>{p.elementSymbol}</span>
+                          <span style={styles.provenanceName}>{p.elementName}{p.format ? ` · ${p.format}` : ''}</span>
+                          <span style={p.rejectedBySubscriber ? styles.rejectedTag : (p.subscriberConfirmed ? styles.confirmedTag : styles.sourceTag)}>
+                            {p.rejectedBySubscriber ? 'Rejected' : (p.subscriberConfirmed ? 'Confirmed owned' : p.ownershipSource)}
+                          </span>
+                          {p.recordedAt && (
+                            <span style={styles.provenanceDate}>
+                              {new Date(p.recordedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Manual completion (FR-28) */}
+                {ob.status !== 'COMPLETE' && (
+                  <Form method="post" onSubmit={(e) => {
+                    if (!confirm("Mark this subscriber's onboarding as complete? This trusts their current owned-items state for assignment.")) e.preventDefault();
+                  }}>
+                    <input type="hidden" name="intent" value="mark-onboarding-complete" />
+                    <input type="hidden" name="onboardingId" value={ob.id} />
+                    <button type="submit" style={styles.markCompleteBtn}>Mark Onboarding Complete</button>
+                  </Form>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ─── Progress Bar ─── */}
       <div style={styles.card}>
@@ -508,5 +643,113 @@ const styles = {
     fontSize: 11,
     color: 'var(--luc-text-muted, #999)',
     whiteSpace: 'nowrap',
+  },
+  onboardingBlock: {
+    border: '1px solid var(--luc-border, #e0e0e0)',
+    borderRadius: 8,
+    padding: 16,
+    marginBottom: 14,
+  },
+  onboardingTop: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    flexWrap: 'wrap',
+    marginBottom: 14,
+  },
+  contractId: {
+    fontSize: 12,
+    color: 'var(--luc-text-muted, #666)',
+    fontFamily: 'monospace',
+  },
+  onboardingMeta: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+    gap: 12,
+    marginBottom: 14,
+  },
+  metaCell: {},
+  metaLabel: {
+    fontSize: 11,
+    color: 'var(--luc-text-muted, #999)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.03em',
+    marginBottom: 3,
+  },
+  metaValue: {
+    fontSize: 13,
+    fontWeight: 600,
+    color: 'var(--luc-text, #1a1a1a)',
+  },
+  graceRemaining: {
+    fontWeight: 500,
+    color: 'var(--luc-text-muted, #888)',
+  },
+  provenanceWrap: {
+    marginBottom: 14,
+  },
+  provenanceEmpty: {
+    fontSize: 12,
+    color: 'var(--luc-text-muted, #999)',
+    marginTop: 4,
+  },
+  provenanceList: {
+    marginTop: 6,
+    border: '1px solid #f0f0f0',
+    borderRadius: 6,
+  },
+  provenanceRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '6px 10px',
+    borderBottom: '1px solid #f5f5f5',
+    fontSize: 12,
+  },
+  provenanceName: {
+    flex: 1,
+    color: 'var(--luc-text, #333)',
+  },
+  provenanceDate: {
+    fontSize: 11,
+    color: 'var(--luc-text-muted, #999)',
+    whiteSpace: 'nowrap',
+  },
+  confirmedTag: {
+    fontSize: 10,
+    fontWeight: 700,
+    color: '#059669',
+    background: '#dcfce7',
+    padding: '1px 7px',
+    borderRadius: 6,
+    whiteSpace: 'nowrap',
+  },
+  rejectedTag: {
+    fontSize: 10,
+    fontWeight: 700,
+    color: '#dc2626',
+    background: '#fee2e2',
+    padding: '1px 7px',
+    borderRadius: 6,
+    whiteSpace: 'nowrap',
+  },
+  sourceTag: {
+    fontSize: 10,
+    fontWeight: 600,
+    color: 'var(--luc-text-muted, #666)',
+    background: '#f3f4f6',
+    padding: '1px 7px',
+    borderRadius: 6,
+    whiteSpace: 'nowrap',
+  },
+  markCompleteBtn: {
+    background: 'var(--luc-accent, #2563eb)',
+    color: '#fff',
+    border: 'none',
+    borderRadius: 8,
+    padding: '8px 14px',
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: 'pointer',
   },
 };
