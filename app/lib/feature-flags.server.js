@@ -64,6 +64,7 @@ export async function seedFeatureFlags() {
     { flagName: "phase2_suggestions", isEnabled: false, description: "Display missing element suggestions" },
     { flagName: "phase3_enabled", isEnabled: false, description: "Dynamic curation system (always false)" },
     { flagName: "feature_collection_passport", isEnabled: true, description: "Collection Passport public collector profiles" },
+    { flagName: "feature_subscription_onboarding_gate", isEnabled: false, description: "Subscription owned-items onboarding flow + assignment-engine gating" },
   ];
 
   for (const flag of flags) {

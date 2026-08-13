@@ -57,6 +57,11 @@ model User {
   resetToken       String?   @unique
   resetTokenExpiry DateTime?
 
+  // Subscription onboarding magic-link fields (FR-12)
+  onboardingToken       String?   @unique
+  onboardingTokenExpiry DateTime?
+  onboardingContractId  String? // The contract this token is bound to
+
   // ─── Admin MVP: Account status & tier ───
   status       String  @default("active") // "active", "frozen"
   freezeReason String? // Reason for account freeze
@@ -99,8 +104,12 @@ model User {
   // ─── Collection Passport relationship ───
   passport CollectorPassport?
 
+  // ─── Subscription Onboarding relationship ───
+  subscriptionOnboardings SubscriptionOnboarding[]
+
   @@index([email])
   @@index([wishlistToken])
+  @@index([onboardingToken])
   @@index([membershipTierId])
   @@index([status])
   @@index([resetToken])
@@ -822,7 +831,7 @@ model CollectionItem {
   atomicNumber  Int
 
   state        String    @default("MISSING") // OWNED, WANTED, WATCHLIST, MISSING
-  format       String? // "10mm", "25.4mm", "50mm", "lucite", "ampoules"
+  format       String? // "10mm_cube", "25.4mm_cube", "50mm_cube", "lucite_cube", "ampule", etc. (canonical format id)
   acquiredDate DateTime?
   acquiredVia  String? // "purchase", "subscription", "gift", "trade", "manual"
   notes        String?
@@ -830,6 +839,13 @@ model CollectionItem {
   // ─── Phase 2: Wishlist context + priority ───
   priority     Int     @default(0) // Wishlist ordering: higher = more important (3=High,2=Med,1=Low)
   contextLabel String? // CORE, EXPLORATION, ASPIRATIONAL, UPGRADE_TARGET
+
+  // ─── Subscription Onboarding: Ownership Provenance (FR-3) ───
+  ownershipSource              String?   @default("MANUAL_CABINET_ENTRY") // SHOPIFY_ORDER_SUGGESTED, ONBOARDING_CONFIRMED, MANUAL_CABINET_ENTRY, PASSPORT_FLOW, STAFF_ENTERED
+  recordedAt                   DateTime  @default(now()) // When this ownership record was created
+  subscriberConfirmed          Boolean   @default(false) // True if user explicitly confirmed during onboarding
+  sourceSubscriptionContractId String? // Seal contract ID if this originated from subscription onboarding
+  rejectedBySubscriber         Boolean   @default(false) // True if user explicitly rejected this suggestion during onboarding (FR-4)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -843,6 +859,8 @@ model CollectionItem {
   @@index([userId])
   @@index([state])
   @@index([userId, state])
+  @@index([sourceSubscriptionContractId])
+  @@index([ownershipSource])
 }
 
 // ─── ElementSample (Phase 2 — multiple physical specimens per element) ──
@@ -1096,6 +1114,34 @@ model SubscriptionTier {
   @@index([collectionType])
   @@index([isActive])
   @@index([appstleSellingPlanId])
+}
+
+// ─── SubscriptionOnboarding ─────────────────────────────────
+// One row per subscription contract to track owned-items onboarding flow.
+// See LuciteriaCabinet_Subscription_Onboarding_FRD_v1.2 for full spec.
+model SubscriptionOnboarding {
+  id                       String    @id @default(cuid())
+  subscriptionContractId   String    @unique // Seal/Shopify subscription contract identifier (upsert target)
+  userId                   String
+  user                     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  formatTrack              String // "10mm", "25.4mm", "lucite" — the subscription tier's collection type
+  status                   String    @default("PENDING") // PENDING, COMPLETE, BACKSTOP_ONLY
+  seededFromOrderHistory   Boolean   @default(false)
+  remindersSent            Int       @default(0)
+  
+  graceExpiresAt           DateTime // createdAt + grace window (default 6 days)
+  graceRemainingSeconds    Int? // Set when paused while PENDING (FR-25)
+  
+  completedAt              DateTime?
+  
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([subscriptionContractId])
+  @@index([graceExpiresAt])
 }
 
 // ─── BillingEvent ───────────────────────────────────────────

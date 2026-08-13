@@ -223,6 +223,30 @@ The Luciteria Team
 ---
 
 This is an automated notification. Please do not reply to this email.`;
+      } else if (template === 'subscription_onboarding_welcome') {
+        const userName = data.customerName || 'Collector';
+        const linkUrl = data.linkUrl || '';
+        const formatLabel = data.formatLabel || 'your collection';
+
+        text = `Hi ${userName},
+
+Welcome to your Luciteria element subscription! 🎉
+
+Your first shipment is already on its way. Before your next one, we'd love for you to tell us which elements you already own in ${formatLabel} — this helps us make sure every future shipment adds something new to your collection.
+
+👉 Confirm the elements you already own here:
+${linkUrl}
+
+It only takes a minute. If we don't hear from you, we'll keep sending you elements as usual — but confirming helps us avoid sending duplicates.
+
+This secure link is tied to your subscription and will expire in 7 days.
+
+Happy Collecting,
+The Luciteria Team
+
+---
+
+This is an automated notification. Please do not reply to this email.`;
       } else {
         // Fallback for other templates
         text = `Hi ${data.customerName || 'Collector'},\n\n`;

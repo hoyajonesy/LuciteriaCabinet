@@ -23,6 +23,8 @@ import {
   recordBillingEvent,
 } from "./seal-subscription-sync.server.js";
 import { SEAL_EVENTS } from "./seal-types.js";
+import { getFeatureFlag } from "../../lib/feature-flags.server.js";
+import { ensureOnboardingForContract } from "../../lib/subscription-onboarding.server.js";
 
 const MODULE = "seal-webhooks";
 
@@ -82,13 +84,34 @@ export async function handleSealSubCreated(payload) {
     data: { isSubscriber: true, subscriptionStatus: "ACTIVE" },
   }).catch((e) => logger.warn(MODULE, `user status update failed: ${e.message}`));
 
-  // Trigger the first shipment assignment immediately.
+  // Trigger the first shipment assignment immediately (FR-13: bounded
+  // fulfillment promise — the first shipment always goes out, regardless of
+  // onboarding state).
   const pipeline = await processShipmentAssignment({
     customer,
     subscription,
     isFirstShipment: true,
     assignedPrice: payload.amountCharged ?? payload.price ?? subscription.priceUsd,
   });
+
+  // Kick off the owned-items onboarding flow (gated behind a feature flag).
+  // Idempotent — safe on webhook retries (FR-16).
+  let onboardingId = null;
+  try {
+    const gateEnabled = await getFeatureFlag("feature_subscription_onboarding_gate");
+    if (gateEnabled && payload.subscriptionContractId) {
+      const { onboarding } = await ensureOnboardingForContract({
+        user,
+        customer,
+        subscription,
+        contractId: payload.subscriptionContractId,
+      });
+      onboardingId = onboarding?.id || null;
+    }
+  } catch (e) {
+    // Never let onboarding failures break the subscription-created flow.
+    logger.warn(MODULE, `onboarding init failed: ${e.message}`);
+  }
 
   return {
     subscriptionId: subscription.id,
@@ -97,6 +120,7 @@ export async function handleSealSubCreated(payload) {
     shipmentId: pipeline.shipment?.id || null,
     assigned: pipeline.assignment?.product?.sku || null,
     requiresReview: Boolean(pipeline.exception),
+    onboardingId,
   };
 }
 

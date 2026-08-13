@@ -361,3 +361,79 @@ export function validatePassword(password) {
   if (password.length < 6) return "Password must be at least 6 characters.";
   return null;
 }
+
+// ─── Subscription Onboarding Magic Link (FR-12) ─────────────────
+
+const ONBOARDING_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function hashOnboardingToken(rawToken) {
+  return crypto.createHash("sha256").update(rawToken).digest("hex");
+}
+
+/**
+ * Create a single-use onboarding magic-link token for a user, bound to a specific
+ * subscription contract (FR-12). Returns { rawToken, user }.
+ */
+export async function createOnboardingToken(userId, subscriptionContractId) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) return { rawToken: null, user: null };
+
+  const rawToken = crypto.randomBytes(32).toString("hex");
+  const onboardingToken = hashOnboardingToken(rawToken);
+  const onboardingTokenExpiry = new Date(Date.now() + ONBOARDING_TOKEN_TTL_MS);
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { 
+      onboardingToken, 
+      onboardingTokenExpiry,
+      onboardingContractId: subscriptionContractId 
+    },
+  });
+
+  return { rawToken, user };
+}
+
+/**
+ * Look up the user for a raw onboarding token, validating that it exists, has not
+ * expired, is bound to the expected contract, and the account is not frozen (FR-12).
+ * Returns the user or null.
+ */
+export async function getUserByOnboardingToken(rawToken, expectedContractId) {
+  if (!rawToken) return null;
+  const onboardingToken = hashOnboardingToken(String(rawToken));
+  const user = await prisma.user.findUnique({ where: { onboardingToken } });
+  
+  if (!user) return null;
+  
+  // Time-limited (FR-12)
+  if (!user.onboardingTokenExpiry || user.onboardingTokenExpiry.getTime() < Date.now()) {
+    return null;
+  }
+  
+  // Bound to specific contract (FR-12)
+  if (user.onboardingContractId !== expectedContractId) {
+    return null;
+  }
+  
+  // Frozen accounts blocked (FR-12)
+  if (user.status === "frozen") {
+    return null;
+  }
+  
+  return user;
+}
+
+/**
+ * Invalidate an onboarding token (called on completion or login, per FR-12).
+ */
+export async function invalidateOnboardingToken(userId) {
+  await prisma.user.update({
+    where: { id: userId },
+    data: { 
+      onboardingToken: null, 
+      onboardingTokenExpiry: null,
+      onboardingContractId: null 
+    },
+  });
+}

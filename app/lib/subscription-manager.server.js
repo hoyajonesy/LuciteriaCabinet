@@ -23,8 +23,64 @@ import {
 } from "./assignment-engine.server.js";
 import { createSubscriptionDraftOrder } from "../integrations/seal/seal-draft-orders.server.js";
 import { getTierByCollectionType } from "./subscription-tiers-db.server.js";
+import { getFeatureFlag } from "./feature-flags.server.js";
+import { resolveAssignmentGate, GATE_MODE } from "./subscription-onboarding.server.js";
+import { canonicalFormatFromSku } from "./seed-order-history.server.js";
+import { normaliseFormat } from "./formats.js";
 
 const MODULE = "subscription-manager";
+
+/**
+ * Resolve the Cabinet userId for a customer (linked by email — see
+ * customer-resolver.server.js). Returns null if none found.
+ */
+async function resolveUserIdForCustomer(customer) {
+  if (!customer?.email) return null;
+  const user = await prisma.user.findUnique({
+    where: { email: customer.email },
+    select: { id: true },
+  });
+  return user?.id || null;
+}
+
+/**
+ * Compute the extra product ids to exclude from assignment based on the user's
+ * confirmed-owned CollectionItems (FR-15 NORMAL / BACKSTOP_ONLY exclusions).
+ *
+ * A product is excluded when its element + canonical SKU format matches a
+ * CollectionItem that is OWNED and not rejected. In BACKSTOP_ONLY mode we only
+ * trust subscriberConfirmed items; unconfirmed order-history suggestions are
+ * NOT excluded (we would rather risk a duplicate than skip an owed item).
+ */
+async function computeOnboardingExclusions(userId, allProducts, { confirmedOnly }) {
+  if (!userId) return [];
+
+  const owned = await prisma.collectionItem.findMany({
+    where: {
+      userId,
+      state: "OWNED",
+      rejectedBySubscriber: false,
+      ...(confirmedOnly ? { subscriberConfirmed: true } : {}),
+    },
+    select: { elementSymbol: true, format: true },
+  });
+
+  if (owned.length === 0) return [];
+
+  // Build a lookup set of "symbol|canonicalFormat" for owned items.
+  const ownedKeys = new Set(
+    owned.map((o) => `${o.elementSymbol.toLowerCase()}|${o.format ? normaliseFormat(o.format) : "null"}`)
+  );
+
+  const excludedIds = [];
+  for (const p of allProducts) {
+    if (!p.elementSymbol || !p.sku) continue;
+    const canonicalFmt = canonicalFormatFromSku(p.sku);
+    const key = `${p.elementSymbol.toLowerCase()}|${canonicalFmt ? normaliseFormat(canonicalFmt) : "null"}`;
+    if (ownedKeys.has(key)) excludedIds.push(p.id);
+  }
+  return excludedIds;
+}
 
 /** Parse a JSON string field into an array, tolerating bad data. */
 function parseArray(value) {
@@ -107,9 +163,35 @@ export async function runAssignment({
     strategy = STRATEGIES.OLDEST_MISSING;
   }
 
+  // ─── Subscription-onboarding exclusions (FR-15) ───
+  // When the onboarding gate is enabled, exclude products the subscriber has
+  // told us (or we inferred) they already own, so we never ship a duplicate.
+  let ownedProductIds = ctx.ownedProductIds;
+  try {
+    const gateEnabled = await getFeatureFlag("feature_subscription_onboarding_gate");
+    if (gateEnabled) {
+      const contractId = subscription?.appstleContractId || subscription?.shopifyContractId || null;
+      const userId = await resolveUserIdForCustomer(customer);
+      const gate = await resolveAssignmentGate({ userId, contractId, isFirstShipment });
+      // NORMAL trusts all owned (confirmed + suggested); BACKSTOP_ONLY trusts
+      // only subscriber-confirmed items.
+      const confirmedOnly = gate.mode === GATE_MODE.BACKSTOP_ONLY;
+      const extra = await computeOnboardingExclusions(userId, ctx.allProducts, { confirmedOnly });
+      if (extra.length > 0) {
+        ownedProductIds = Array.from(new Set([...ownedProductIds, ...extra]));
+        logger.info(MODULE, `Onboarding exclusions applied (${gate.mode})`, {
+          extra: extra.length,
+          confirmedOnly,
+        });
+      }
+    }
+  } catch (e) {
+    logger.warn(MODULE, `Onboarding exclusion computation failed: ${e.message}`);
+  }
+
   const result = assignNextItem({
     customer: { ...customer, collectionType },
-    ownedProductIds: ctx.ownedProductIds,
+    ownedProductIds,
     shippedProductIds: ctx.shippedProductIds,
     preferences: ctx.preferences,
     wishlistProductIds: ctx.wishlistProductIds,
@@ -152,6 +234,35 @@ export async function processShipmentAssignment({
   assignedPrice = null,
 }) {
   const price = assignedPrice ?? subscription.priceUsd ?? 0;
+
+  // ─── Onboarding gate (FR-15) ───
+  // For renewal shipments (not the first), hold assignment while the subscriber
+  // is still within the onboarding grace window and hasn't completed. The first
+  // shipment is the bounded fulfillment promise and always proceeds (FR-13).
+  if (!isFirstShipment) {
+    try {
+      const gateEnabled = await getFeatureFlag("feature_subscription_onboarding_gate");
+      if (gateEnabled) {
+        const contractId = subscription?.appstleContractId || subscription?.shopifyContractId || null;
+        const userId = await resolveUserIdForCustomer(customer);
+        const gate = await resolveAssignmentGate({ userId, contractId, isFirstShipment });
+        if (gate.mode === GATE_MODE.BLOCKED) {
+          logger.info(MODULE, `Assignment BLOCKED pending onboarding for contract ${contractId}`);
+          return {
+            shipment: null,
+            assignment: null,
+            draftOrder: null,
+            exception: null,
+            blocked: true,
+            gateMode: gate.mode,
+          };
+        }
+      }
+    } catch (e) {
+      // Fail open — never block fulfillment because of a gate error.
+      logger.warn(MODULE, `Onboarding gate check failed (proceeding): ${e.message}`);
+    }
+  }
 
   // 1. Create the shipment shell (status: scheduled).
   const shipment = await prisma.subscriptionShipment.create({
