@@ -316,6 +316,29 @@ The Luciteria Team
 ---
 
 This is an automated notification. Please do not reply to this email.`;
+      } else if (template === 'subscription_empty_pool_waitlist') {
+        const userName = data.customerName || 'Collector';
+        const formatLabel = data.formatLabel || 'your collection';
+        const creditAmount = data.creditAmount || '0.00';
+        const billingCycle = data.billingCycle || 'this cycle';
+
+        text = `Hi ${userName},
+
+Quick update on your Luciteria subscription for ${billingCycle}. 🔬
+
+Good news—you've already collected every eligible element in ${formatLabel} that we currently have in stock! Rather than send a duplicate, we've placed you on the waitlist and added $${creditAmount} to your Cabinet store credit.
+
+You'll be the first to know when we have new eligible items available for your collection. In the meantime, you can use your credit toward any Luciteria purchase, or save it for when your next subscription element ships.
+
+View your credit balance in your Cabinet:
+👉 ${data.cabinetUrl || 'https://cabinet.luciteria.com'}
+
+Happy Collecting,
+The Luciteria Team
+
+---
+
+This is an automated notification. Please do not reply to this email.`;
       } else {
         // Fallback for other templates
         text = `Hi ${data.customerName || 'Collector'},\n\n`;

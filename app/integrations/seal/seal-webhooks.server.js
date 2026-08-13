@@ -206,6 +206,25 @@ export async function handleSealPaused(payload) {
     data: { status: "skipped" },
   });
 
+  // FR-25: Persist remaining grace window for PENDING onboarding
+  if (payload.subscriptionContractId) {
+    const onboarding = await prisma.subscriptionOnboarding.findUnique({
+      where: { subscriptionContractId: payload.subscriptionContractId },
+    });
+    if (onboarding && onboarding.status === "PENDING" && onboarding.graceExpiresAt) {
+      const now = new Date();
+      const graceRemainingMs = onboarding.graceExpiresAt.getTime() - now.getTime();
+      const graceRemainingSeconds = Math.max(0, Math.ceil(graceRemainingMs / 1000));
+      
+      await prisma.subscriptionOnboarding.update({
+        where: { id: onboarding.id },
+        data: { graceRemainingSeconds },
+      });
+      
+      logger.info(MODULE, `Persisted grace window: ${graceRemainingSeconds}s for onboarding ${onboarding.id}`);
+    }
+  }
+
   await updateUserSubscriptionStatus(subscription.customerId, "PAUSED", true);
   await sendCustomerNotification(subscription.customerId, {
     title: "Subscription paused",
@@ -243,6 +262,27 @@ export async function handleSealActivated(payload) {
       nextBillingDate: payload.nextBillingDate || subscription.nextBillingDate,
     },
   });
+
+  // FR-25: Restore grace window for PENDING onboarding
+  if (payload.subscriptionContractId) {
+    const onboarding = await prisma.subscriptionOnboarding.findUnique({
+      where: { subscriptionContractId: payload.subscriptionContractId },
+    });
+    if (onboarding && onboarding.status === "PENDING" && onboarding.graceRemainingSeconds !== null) {
+      const now = new Date();
+      const newGraceExpiresAt = new Date(now.getTime() + (onboarding.graceRemainingSeconds * 1000));
+      
+      await prisma.subscriptionOnboarding.update({
+        where: { id: onboarding.id },
+        data: { 
+          graceExpiresAt: newGraceExpiresAt,
+          graceRemainingSeconds: null,
+        },
+      });
+      
+      logger.info(MODULE, `Restored grace window: ${onboarding.graceRemainingSeconds}s → new expiry ${newGraceExpiresAt.toISOString()} for onboarding ${onboarding.id}`);
+    }
+  }
 
   await updateUserSubscriptionStatus(subscription.customerId, "ACTIVE", true);
 

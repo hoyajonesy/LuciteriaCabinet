@@ -278,6 +278,25 @@ export default function AdminUserDetail() {
                   )}
                 </div>
 
+                {/* Carry-forward credits (FR-20/21) */}
+                {ob.carryForwardCredits && ob.carryForwardCredits.length > 0 && (
+                  <div style={styles.provenanceWrap}>
+                    <div style={styles.metaLabel}>Carry-forward credits (empty pool)</div>
+                    <div style={styles.provenanceList}>
+                      {ob.carryForwardCredits.map(c => (
+                        <div key={c.id} style={styles.provenanceRow}>
+                          <span style={styles.creditAmount}>${c.amount.toFixed(2)}</span>
+                          <span style={styles.creditCycle}>Cycle {c.billingCycle}</span>
+                          <span style={styles.creditDesc}>{c.description}</span>
+                          <span style={styles.provenanceDate}>
+                            {new Date(c.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Manual completion (FR-28) */}
                 {ob.status !== 'COMPLETE' && (
                   <Form method="post" onSubmit={(e) => {
@@ -732,6 +751,23 @@ const styles = {
     padding: '1px 7px',
     borderRadius: 6,
     whiteSpace: 'nowrap',
+  },
+  creditAmount: {
+    fontSize: 13,
+    fontWeight: 700,
+    color: 'var(--luc-gold, #d4af37)',
+    whiteSpace: 'nowrap',
+  },
+  creditCycle: {
+    fontSize: 11,
+    fontWeight: 600,
+    color: 'var(--luc-text-muted, #666)',
+    fontFamily: 'monospace',
+  },
+  creditDesc: {
+    flex: 1,
+    fontSize: 11,
+    color: 'var(--luc-text-muted, #888)',
   },
   sourceTag: {
     fontSize: 10,

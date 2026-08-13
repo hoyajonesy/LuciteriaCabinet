@@ -23,6 +23,7 @@ import {
   OWNERSHIP_SOURCE,
 } from "./ownership-provenance.server.js";
 import { sendEmail } from "./notifications.server.js";
+import { grantCarryForwardCredit } from "./credits.server.js";
 
 const MODULE = "subscription-onboarding";
 
@@ -483,4 +484,76 @@ export async function markOnboardingCompleteByAdmin({ onboardingId, staff }) {
 
   logger.info(MODULE, `Onboarding ${onboardingId} marked COMPLETE by admin ${staff?.email || "unknown"}`);
   return updated;
+}
+
+/**
+ * Handle empty eligible pool (FR-14/17/20/21).
+ * Grant carry-forward credit, notify subscriber, log activity.
+ * Idempotent per (subscriptionContractId, billingCycle).
+ *
+ * @param {Object} params
+ * @param {string} params.userId
+ * @param {string} params.subscriptionContractId
+ * @param {string} params.billingCycle - ISO date or cycle identifier (e.g., "2026-08")
+ * @param {number} params.creditAmount - Subscription cycle value to carry forward
+ * @param {string} params.formatTrack - Format track label for the notification
+ * @param {string} [params.cabinetUrl] - URL to Cabinet for email
+ * @returns {Promise<{ creditGranted: boolean, wasAlreadyGranted: boolean, transaction: object }>}
+ */
+export async function handleEmptyPool({
+  userId,
+  subscriptionContractId,
+  billingCycle,
+  creditAmount,
+  formatTrack,
+  cabinetUrl = "https://cabinet.luciteria.com",
+}) {
+  if (!userId || !subscriptionContractId || !billingCycle || !creditAmount) {
+    throw new Error("handleEmptyPool requires userId, subscriptionContractId, billingCycle, and creditAmount");
+  }
+
+  // Grant the credit (idempotent per FR-21)
+  const { balance, transaction, wasAlreadyGranted } = await grantCarryForwardCredit(
+    userId,
+    subscriptionContractId,
+    billingCycle,
+    creditAmount,
+    `Empty eligible pool for ${formatTrack} — carry-forward credit for cycle ${billingCycle}`
+  );
+
+  // Log activity (only if this is the first grant to avoid duplicate logs)
+  if (!wasAlreadyGranted) {
+    await logOnboardingActivity(userId, "onboarding_empty_pool_credit", {
+      subscriptionContractId,
+      billingCycle,
+      creditAmount,
+      formatTrack,
+      newBalance: balance,
+      transactionId: transaction.id,
+    });
+
+    // Send waitlist notification email
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (user?.email) {
+      try {
+        await sendEmail({
+          to: user.email,
+          subject: `Luciteria Subscription — Waitlisted for ${formatTrack}`,
+          template: "subscription_empty_pool_waitlist",
+          data: {
+            customerName: user.firstName || user.name || "Collector",
+            formatLabel: formatTrack,
+            creditAmount: creditAmount.toFixed(2),
+            billingCycle,
+            cabinetUrl,
+          },
+        });
+        logger.info(MODULE, `Empty-pool waitlist email sent to ${user.email} for ${subscriptionContractId} cycle ${billingCycle}`);
+      } catch (emailErr) {
+        logger.error(MODULE, `Failed to send empty-pool email: ${emailErr.message}`);
+      }
+    }
+  }
+
+  return { creditGranted: true, wasAlreadyGranted, transaction };
 }

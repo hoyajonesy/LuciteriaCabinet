@@ -545,17 +545,22 @@ model CreditTransaction {
   user   User   @relation(fields: [userId], references: [id])
 
   amount      Float
-  type        String // MONTHLY_GRANT, PURCHASE, REFUND, SPENT
+  type        String // MONTHLY_GRANT, PURCHASE, REFUND, SPENT, SUBSCRIPTION_CARRYFORWARD
   description String
 
   balanceBefore Float
   balanceAfter  Float
+
+  // For idempotent subscription carry-forward credits (FR-21)
+  subscriptionContractId String?
+  billingCycle           String?
 
   createdAt DateTime @default(now())
 
   @@index([userId])
   @@index([type])
   @@index([createdAt])
+  @@unique([subscriptionContractId, billingCycle], name: "subscription_cycle_credit")
 }
 
 // ─── Product/SKU Subscription Eligibility ───────────────────

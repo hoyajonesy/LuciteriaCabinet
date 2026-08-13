@@ -151,3 +151,66 @@ export async function grantAllMonthlyCredits() {
 
   return results;
 }
+
+/**
+ * Grant subscription carry-forward credit (FR-20/21)
+ * Idempotent per (subscriptionContractId, billingCycle)
+ * 
+ * @param {string} userId
+ * @param {string} subscriptionContractId
+ * @param {string} billingCycle - ISO date string or cycle identifier (e.g., "2026-08")
+ * @param {number} amount - Credit amount to grant
+ * @param {string} reason - Human-readable reason for the credit
+ * @returns {Promise<{ balance: number, transaction: Object, wasAlreadyGranted: boolean }>}
+ */
+export async function grantCarryForwardCredit(userId, subscriptionContractId, billingCycle, amount, reason) {
+  if (amount <= 0) throw new Error("Credit amount must be positive");
+  if (!subscriptionContractId) throw new Error("subscriptionContractId is required for carry-forward credits");
+  if (!billingCycle) throw new Error("billingCycle is required for carry-forward credits");
+
+  // Check if this credit was already granted (idempotency check per FR-21)
+  const existing = await prisma.creditTransaction.findFirst({
+    where: {
+      subscriptionContractId,
+      billingCycle,
+      type: "SUBSCRIPTION_CARRYFORWARD",
+    },
+  });
+
+  if (existing) {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { storeCreditBalance: true } });
+    return {
+      balance: user?.storeCreditBalance ?? 0,
+      transaction: existing,
+      wasAlreadyGranted: true,
+    };
+  }
+
+  // Grant the credit
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new Error("User not found");
+
+  const balanceBefore = user.storeCreditBalance;
+  const balanceAfter = balanceBefore + amount;
+
+  const [updatedUser, transaction] = await prisma.$transaction([
+    prisma.user.update({
+      where: { id: userId },
+      data: { storeCreditBalance: balanceAfter },
+    }),
+    prisma.creditTransaction.create({
+      data: {
+        userId,
+        amount,
+        type: "SUBSCRIPTION_CARRYFORWARD",
+        description: reason || `Subscription carry-forward credit — no eligible items for cycle ${billingCycle}`,
+        balanceBefore,
+        balanceAfter,
+        subscriptionContractId,
+        billingCycle,
+      },
+    }),
+  ]);
+
+  return { balance: updatedUser.storeCreditBalance, transaction, wasAlreadyGranted: false };
+}

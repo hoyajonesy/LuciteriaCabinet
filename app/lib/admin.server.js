@@ -207,6 +207,15 @@ export async function getUserCollectionDetail(userId) {
     orderBy: { createdAt: 'desc' },
   });
 
+  // Fetch carry-forward credits for these contracts (FR-20/21)
+  const carryForwardCredits = await prisma.creditTransaction.findMany({
+    where: {
+      userId,
+      type: 'SUBSCRIPTION_CARRYFORWARD',
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
   const now = Date.now();
   const subscriptionOnboardings = onboardingRecords.map(ob => {
     // Ownership records that originated from this onboarding contract (FR-3/4).
@@ -221,6 +230,17 @@ export async function getUserCollectionDetail(userId) {
         subscriberConfirmed: i.subscriberConfirmed,
         rejectedBySubscriber: i.rejectedBySubscriber,
         recordedAt: i.recordedAt ? i.recordedAt.toISOString() : null,
+      }));
+
+    // Carry-forward credits for this contract
+    const contractCredits = carryForwardCredits
+      .filter(c => c.subscriptionContractId === ob.subscriptionContractId)
+      .map(c => ({
+        id: c.id,
+        amount: c.amount,
+        billingCycle: c.billingCycle,
+        description: c.description,
+        createdAt: c.createdAt.toISOString(),
       }));
 
     const graceRemainingSeconds =
@@ -240,6 +260,7 @@ export async function getUserCollectionDetail(userId) {
       completedAt: ob.completedAt ? ob.completedAt.toISOString() : null,
       createdAt: ob.createdAt.toISOString(),
       provenanceItems,
+      carryForwardCredits: contractCredits,
     };
   });
 
