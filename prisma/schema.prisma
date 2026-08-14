@@ -319,9 +319,24 @@ model SubscriptionShipment {
   notes               String?
   createdAt           DateTime @default(now())
 
-  subscription Subscription   @relation(fields: [subscriptionId], references: [id])
-  customer     Customer       @relation(fields: [customerId], references: [id])
+  // ─── Swap & Skip Window (feature_swap_skip_window) ───
+  // A shipment enters the "held_for_swap" status (free-text `status`) when its
+  // decision window opens; the customer may SWAP the assigned item or SKIP the
+  // shipment before the window closes, after which it finalizes normally.
+  windowOpensAt                   DateTime? // when the decision window opened
+  windowExpiresAt                 DateTime? // when the window auto-finalizes
+  windowRemainingSeconds          Int? // seconds left, captured on pause (FR-17/FR-32)
+  swapDecision                    String    @default("NONE") // NONE, SWAPPED, SKIPPED
+  originalProductId               String? // product held when window opened (swap provenance)
+  decidedAt                       DateTime? // when the customer made a swap/skip decision
+  finalizationClaimed             Boolean   @default(false) // atomic finalization guard
+  appliedWindowLengthDays         Int? // SwapWindowSettings snapshot at window open
+  appliedSwapFinalizesImmediately Boolean? // SwapWindowSettings snapshot at window open
+
+  subscription Subscription        @relation(fields: [subscriptionId], references: [id])
+  customer     Customer            @relation(fields: [customerId], references: [id])
   items        ShipmentItem[]
+  swapEvents   ShipmentSwapEvent[]
 
   // Indexes
   @@index([customerId])
@@ -556,12 +571,17 @@ model CreditTransaction {
   subscriptionContractId String?
   billingCycle           String?
 
+  // Swap & Skip Window: skip credits expire 90 days after subscription
+  // cancellation (skipCreditPostCancellationDays). null = no expiry.
+  expiresAt DateTime?
+
   createdAt DateTime @default(now())
 
+  @@unique([subscriptionContractId, billingCycle], name: "subscription_cycle_credit")
   @@index([userId])
   @@index([type])
   @@index([createdAt])
-  @@unique([subscriptionContractId, billingCycle], name: "subscription_cycle_credit")
+  @@index([expiresAt])
 }
 
 // ─── Product/SKU Subscription Eligibility ───────────────────
@@ -847,11 +867,11 @@ model CollectionItem {
   contextLabel String? // CORE, EXPLORATION, ASPIRATIONAL, UPGRADE_TARGET
 
   // ─── Subscription Onboarding: Ownership Provenance (FR-3) ───
-  ownershipSource              String?   @default("MANUAL_CABINET_ENTRY") // SHOPIFY_ORDER_SUGGESTED, ONBOARDING_CONFIRMED, MANUAL_CABINET_ENTRY, PASSPORT_FLOW, STAFF_ENTERED
-  recordedAt                   DateTime  @default(now()) // When this ownership record was created
-  subscriberConfirmed          Boolean   @default(false) // True if user explicitly confirmed during onboarding
+  ownershipSource              String?  @default("MANUAL_CABINET_ENTRY") // SHOPIFY_ORDER_SUGGESTED, ONBOARDING_CONFIRMED, MANUAL_CABINET_ENTRY, PASSPORT_FLOW, STAFF_ENTERED
+  recordedAt                   DateTime @default(now()) // When this ownership record was created
+  subscriberConfirmed          Boolean  @default(false) // True if user explicitly confirmed during onboarding
   sourceSubscriptionContractId String? // Seal contract ID if this originated from subscription onboarding
-  rejectedBySubscriber         Boolean   @default(false) // True if user explicitly rejected this suggestion during onboarding (FR-4)
+  rejectedBySubscriber         Boolean  @default(false) // True if user explicitly rejected this suggestion during onboarding (FR-4)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -967,7 +987,7 @@ model NotificationPreference {
   emailNewArrival     Boolean @default(false)
 
   // Watchlist stock alerts (in-app + email) for wishlisted elements going in/out of stock
-  watchlistAlerts     Boolean @default(true)
+  watchlistAlerts Boolean @default(true)
 
   // Weekly digest of low-signal events
   weeklyDigest     Boolean   @default(true)
@@ -1090,9 +1110,9 @@ model SubscriptionTier {
   // ── Pricing ──────────────────────────────────────────────
   monthlyPrice         Float // canonical monthly price, e.g. 49.99
   creditValue          Float? // store credit granted per cycle (if applicable)
-  discountPercentage   Float   @default(0.20) // subscriber discount applied to assigned items
-  billingInterval      String  @default("MONTH") // MONTH, QUARTER
-  billingIntervalCount Int     @default(1)
+  discountPercentage   Float  @default(0.20) // subscriber discount applied to assigned items
+  billingInterval      String @default("MONTH") // MONTH, QUARTER
+  billingIntervalCount Int    @default(1)
 
   // ── Product eligibility rules ────────────────────────────
   // allowedCollectionTypes lets a tier span multiple collection types; when
@@ -1126,32 +1146,32 @@ model SubscriptionTier {
 // One row per subscription contract to track owned-items onboarding flow.
 // See LuciteriaCabinet_Subscription_Onboarding_FRD_v1.2 for full spec.
 model SubscriptionOnboarding {
-  id                       String    @id @default(cuid())
-  subscriptionContractId   String    @unique // Seal/Shopify subscription contract identifier (upsert target)
-  userId                   String
-  user                     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                     String @id @default(cuid())
+  subscriptionContractId String @unique // Seal/Shopify subscription contract identifier (upsert target)
+  userId                 String
+  user                   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  formatTrack              String // "10mm", "25.4mm", "lucite" — the subscription tier's collection type
-  status                   String    @default("PENDING") // PENDING, COMPLETE, BACKSTOP_ONLY
-  seededFromOrderHistory   Boolean   @default(false)
-  remindersSent            Int       @default(0)
+  formatTrack            String // "10mm", "25.4mm", "lucite" — the subscription tier's collection type
+  status                 String  @default("PENDING") // PENDING, COMPLETE, BACKSTOP_ONLY
+  seededFromOrderHistory Boolean @default(false)
+  remindersSent          Int     @default(0)
 
   // FR-16/FR-17: atomic check-and-set guard so the immediate first-assignment
   // trigger and the scheduled Assignment Engine batch never both process the
   // same contract's first cycle (idempotency across the two paths).
-  firstAssignmentTriggered Boolean   @default(false)
+  firstAssignmentTriggered Boolean @default(false)
 
-  graceExpiresAt           DateTime // createdAt + grace window (default 6 days)
-  graceRemainingSeconds    Int? // Set when paused while PENDING (FR-25)
-  
-  completedAt              DateTime?
+  graceExpiresAt        DateTime // createdAt + grace window (default 6 days)
+  graceRemainingSeconds Int? // Set when paused while PENDING (FR-25)
+
+  completedAt DateTime?
 
   // FR-29: explicit "no ownership changes confirmed" reason recorded when staff
   // manually complete an onboarding without confirming owned items.
-  staffNote                String?
-  
-  createdAt                DateTime  @default(now())
-  updatedAt                DateTime  @updatedAt
+  staffNote String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
   @@index([status])
@@ -1169,20 +1189,20 @@ model SubscriptionOnboarding {
 // existing rejection is superseded (supersededAt/supersededBy) rather than
 // leaving two contradictory active records.
 model OwnershipRejection {
-  id                           String    @id @default(cuid())
-  userId                       String
-  user                         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   ownableUnitId                String // Normalized identity from FR-1/FR-2 ("fe|10mm_cube")
-  recordedAt                   DateTime  @default(now())
-  reason                       String    @default("ONBOARDING_DECLINED") // ONBOARDING_DECLINED, GIFT, NO_LONGER_OWNED, OTHER
+  recordedAt                   DateTime @default(now())
+  reason                       String   @default("ONBOARDING_DECLINED") // ONBOARDING_DECLINED, GIFT, NO_LONGER_OWNED, OTHER
   sourceSubscriptionContractId String? // Onboarding contract this rejection originated from, if any
 
-  supersededAt                 DateTime? // Set if a later customer action reverses this rejection
-  supersededBy                 String? // Reference describing what reversed it (e.g. the ownership record id)
+  supersededAt DateTime? // Set if a later customer action reverses this rejection
+  supersededBy String? // Reference describing what reversed it (e.g. the ownership record id)
 
-  createdAt                    DateTime  @default(now())
-  updatedAt                    DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
   @@index([userId, ownableUnitId])
@@ -1239,7 +1259,6 @@ model AssignmentPreview {
   @@index([productId])
 }
 
-
 // ═══════════════════════════════════════════════════════════════
 // COLLECTION PASSPORT — Viral Growth Feature (Option 1)
 // ═══════════════════════════════════════════════════════════════
@@ -1278,4 +1297,73 @@ model PassportFeaturedElement {
   @@unique([passportId, elementKey, format])
   @@unique([passportId, displayOrder])
   @@index([passportId])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SWAP & SKIP WINDOW (feature_swap_skip_window)
+// ═══════════════════════════════════════════════════════════════
+
+// ─── ShipmentSwapEvent (audit trail of window decisions) ──────
+// One row per decision/finalization action taken on a shipment while (or
+// because) its swap/skip window was open. Provides a full history for admin
+// review and debugging. AdminUser / User references are stored as plain string
+// ids (matching the schema's admin-reference convention) to avoid mandatory
+// back-relations.
+model ShipmentSwapEvent {
+  id         String @id @default(cuid())
+  shipmentId String
+
+  action String // SWAP, SKIP, AUTO_FINALIZE, STAFF_OVERRIDE, WINDOW_OPENED, PAUSED, RESUMED
+  source String // CUSTOMER, SYSTEM, STAFF
+
+  fromProductId String? // product assigned before the action
+  toProductId   String? // product assigned after the action (swap target)
+
+  userId  String? // Customer's User.id (for CUSTOMER-sourced actions)
+  staffId String? // AdminUser.id (for STAFF-sourced actions)
+
+  note      String?
+  createdAt DateTime @default(now())
+
+  shipment SubscriptionShipment @relation(fields: [shipmentId], references: [id])
+
+  @@index([shipmentId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// ─── SwapWindowSettings (singleton configuration) ─────────────
+// Global tunables for the swap/skip window. Enforced as a singleton in the app
+// layer (id = "singleton"). Starting values match the FRD proposed defaults.
+model SwapWindowSettings {
+  id String @id @default("singleton")
+
+  windowLengthDays             Int     @default(6)
+  swapFinalizesImmediately     Boolean @default(true)
+  allowMultipleDecisionChanges Boolean @default(false)
+  firstShipmentGetsWindow      Boolean @default(true)
+  backstopAssignmentGetsWindow Boolean @default(true)
+
+  // Skip-credit policy
+  skipCreditStackableWithTierCredit Boolean @default(true)
+  skipCreditRefundOnCancellation    Boolean @default(false)
+  skipCreditRedeemableAtCheckout    Boolean @default(false)
+  skipCreditExpiryDays              Int? // general expiry in days; null = none
+  skipCreditPostCancellationDays    Int     @default(90) // usable window after cancellation
+
+  updatedByAdminUserId String? // AdminUser.id of last editor
+  updatedAt            DateTime @updatedAt
+}
+
+// ─── SwapWindowSettingsAudit (field-level change history) ─────
+model SwapWindowSettingsAudit {
+  id           String   @id @default(cuid())
+  adminUserId  String // AdminUser.id who made the change
+  settingField String // which SwapWindowSettings field changed
+  oldValue     String?
+  newValue     String
+  changedAt    DateTime @default(now())
+
+  @@index([adminUserId])
+  @@index([changedAt])
 }
