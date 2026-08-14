@@ -27,6 +27,12 @@ import { getFeatureFlag } from "./feature-flags.server.js";
 import { resolveAssignmentGate, GATE_MODE, handleEmptyPool, claimFirstAssignment, noteFlagOffDecision } from "./subscription-onboarding.server.js";
 import { canonicalFormatFromSku } from "./seed-order-history.server.js";
 import { ownableUnitId, getActiveRejections } from "./ownership-provenance.server.js";
+import {
+  SWAP_WINDOW_FLAG,
+  getSwapWindowSettings,
+  shipmentIsWindowEligible,
+  enterSwapWindow,
+} from "./swap-window.server.js";
 
 const MODULE = "subscription-manager";
 
@@ -34,7 +40,7 @@ const MODULE = "subscription-manager";
  * Resolve the Cabinet userId for a customer (linked by email — see
  * customer-resolver.server.js). Returns null if none found.
  */
-async function resolveUserIdForCustomer(customer) {
+export async function resolveUserIdForCustomer(customer) {
   if (!customer?.email) return null;
   const user = await prisma.user.findUnique({
     where: { email: customer.email },
@@ -193,12 +199,14 @@ export async function runAssignment({
   // When the onboarding gate is enabled, exclude products the subscriber has
   // told us (or we inferred) they already own, so we never ship a duplicate.
   let ownedProductIds = ctx.ownedProductIds;
+  let gateMode = null;
   try {
     const gateEnabled = await getFeatureFlag("feature_subscription_onboarding_gate");
     if (gateEnabled) {
       const contractId = subscription?.appstleContractId || subscription?.shopifyContractId || null;
       const userId = await resolveUserIdForCustomer(customer);
       const gate = await resolveAssignmentGate({ userId, contractId, isFirstShipment });
+      gateMode = gate.mode;
       // NORMAL trusts all owned (confirmed + suggested); BACKSTOP_ONLY trusts
       // only subscriber-confirmed items.
       const confirmedOnly = gate.mode === GATE_MODE.BACKSTOP_ONLY;
@@ -239,7 +247,7 @@ export async function runAssignment({
     audit: result.audit,
   });
 
-  return { ...result, context: ctx, strategy, collectionType, tier };
+  return { ...result, context: ctx, strategy, collectionType, tier, gateMode };
 }
 
 /**
@@ -447,6 +455,49 @@ export async function processShipmentAssignment({
       where: { id: shipment.id },
     });
     return { shipment: freshShipment, assignment, draftOrder: null, exception };
+  }
+
+  // 4b. Swap & Skip Window (FR-1/FR-2/FR-3) — defer finalization.
+  // Auto-approved shipments enter a bounded "held" state during which the
+  // subscriber may swap or skip. Finalization is deferred to the window-close
+  // job. When the flag is OFF this branch is skipped entirely, so the legacy
+  // finalize-immediately behavior is preserved (FR-26).
+  try {
+    const swapEnabled = await getFeatureFlag(SWAP_WINDOW_FLAG);
+    if (swapEnabled) {
+      const swapSettings = await getSwapWindowSettings();
+      const eligible = shipmentIsWindowEligible({
+        isFirstShipment,
+        gateMode: assignment.gateMode || null,
+        settings: swapSettings,
+      });
+      if (eligible) {
+        const userId = await resolveUserIdForCustomer(customer);
+        const held = await enterSwapWindow({
+          shipmentId: shipment.id,
+          originalProductId: product.id,
+          settings: swapSettings,
+          userId,
+        });
+        // Refresh the preview sequence so the cabinet reflects the held pick.
+        try {
+          await refreshAssignmentPreview({ customer, subscription });
+        } catch (err) {
+          logger.warn(MODULE, `Assignment preview refresh failed: ${err.message}`);
+        }
+        return {
+          shipment: held,
+          assignment,
+          draftOrder: null,
+          exception: null,
+          held: true,
+        };
+      }
+    }
+  } catch (e) {
+    // Fail safe: if the window machinery errors, fall through to finalize so a
+    // shipment is never stuck un-finalized because of the swap feature.
+    logger.warn(MODULE, `Swap window entry failed (finalizing normally): ${e.message}`);
   }
 
   // 5. Auto-approved → finalize (create the Shopify draft order, FR-33).

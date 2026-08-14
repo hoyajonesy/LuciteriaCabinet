@@ -214,3 +214,78 @@ export async function grantCarryForwardCredit(userId, subscriptionContractId, bi
 
   return { balance: updatedUser.storeCreditBalance, transaction, wasAlreadyGranted: false };
 }
+
+/**
+ * Grant skip-banked store credit (Swap & Skip Window, FR-12).
+ *
+ * A subscriber who skips a held cycle banks the cycle's assigned value as store
+ * credit. Reuses the existing CreditTransaction ledger and the SAME
+ * (subscriptionContractId, billingCycle) idempotency key as empty-pool
+ * carry-forward credit.
+ *
+ * CRITICAL (FR-12 / Section 4): the underlying unique DB constraint
+ * `subscription_cycle_credit` is TYPE-AGNOSTIC — it allows at most one
+ * CreditTransaction row per (subscriptionContractId, billingCycle) regardless of
+ * `type`. The dedup check here therefore looks for ANY existing row for that
+ * (contract, cycle) pair (NOT filtered to type = SUBSCRIPTION_SKIP_CREDIT), so a
+ * skip correctly detects — and never collides at the raw DB level with — an
+ * empty-pool carry-forward row already granted for the same cycle.
+ *
+ * @param {string} userId
+ * @param {string} subscriptionContractId
+ * @param {string} billingCycle - cycle identifier (e.g. "2026-08")
+ * @param {number} amount
+ * @param {string} [reason]
+ * @param {Object} [opts]
+ * @param {Date|null} [opts.expiresAt] - optional expiry timestamp for the credit
+ * @returns {Promise<{ balance: number, transaction: Object, wasAlreadyGranted: boolean, collidedType?: string }>}
+ */
+export async function grantSkipCredit(userId, subscriptionContractId, billingCycle, amount, reason, opts = {}) {
+  const { expiresAt = null } = opts;
+  if (amount <= 0) throw new Error("Credit amount must be positive");
+  if (!subscriptionContractId) throw new Error("subscriptionContractId is required for skip credits");
+  if (!billingCycle) throw new Error("billingCycle is required for skip credits");
+
+  // Type-AGNOSTIC idempotency / collision check (FR-12).
+  const existing = await prisma.creditTransaction.findFirst({
+    where: { subscriptionContractId, billingCycle },
+  });
+
+  if (existing) {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { storeCreditBalance: true } });
+    return {
+      balance: user?.storeCreditBalance ?? 0,
+      transaction: existing,
+      wasAlreadyGranted: true,
+      collidedType: existing.type,
+    };
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new Error("User not found");
+
+  const balanceBefore = user.storeCreditBalance;
+  const balanceAfter = balanceBefore + amount;
+
+  const [updatedUser, transaction] = await prisma.$transaction([
+    prisma.user.update({
+      where: { id: userId },
+      data: { storeCreditBalance: balanceAfter },
+    }),
+    prisma.creditTransaction.create({
+      data: {
+        userId,
+        amount,
+        type: "SUBSCRIPTION_SKIP_CREDIT",
+        description: reason || `Skipped subscription cycle ${billingCycle} — credited $${amount.toFixed(2)}`,
+        balanceBefore,
+        balanceAfter,
+        subscriptionContractId,
+        billingCycle,
+        expiresAt,
+      },
+    }),
+  ]);
+
+  return { balance: updatedUser.storeCreditBalance, transaction, wasAlreadyGranted: false };
+}
