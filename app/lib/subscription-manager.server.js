@@ -24,7 +24,7 @@ import {
 import { createSubscriptionDraftOrder } from "../integrations/seal/seal-draft-orders.server.js";
 import { getTierByCollectionType } from "./subscription-tiers-db.server.js";
 import { getFeatureFlag } from "./feature-flags.server.js";
-import { resolveAssignmentGate, GATE_MODE } from "./subscription-onboarding.server.js";
+import { resolveAssignmentGate, GATE_MODE, handleEmptyPool } from "./subscription-onboarding.server.js";
 import { canonicalFormatFromSku } from "./seed-order-history.server.js";
 import { normaliseFormat } from "./formats.js";
 
@@ -294,6 +294,46 @@ export async function processShipmentAssignment({
       "Subscription assignment needs attention",
       `No product could be auto-assigned for ${customer.firstName} ${customer.lastName} (${assignment.collectionType}). Reason: ${assignment.reason}`
     );
+
+    // ─── Empty pool handling (FR-14/17/20/21) ───
+    // If the assignment failed because there are no eligible items (the pool is
+    // empty) AND this is a renewal (not first shipment) AND the onboarding
+    // feature is enabled, grant a carry-forward credit to the subscriber.
+    if (
+      !isFirstShipment &&
+      assignment.exception?.reason === "no_eligible_items"
+    ) {
+      try {
+        const gateEnabled = await getFeatureFlag("feature_subscription_onboarding_gate");
+        if (gateEnabled) {
+          const userId = await resolveUserIdForCustomer(customer);
+          const contractId = subscription?.appstleContractId || subscription?.shopifyContractId || null;
+          if (userId && contractId) {
+            const billingCycle = subscription.nextBillingDate
+              ? new Date(subscription.nextBillingDate).toISOString().slice(0, 7) // "2026-08"
+              : new Date().toISOString().slice(0, 7);
+            const creditAmount = subscription.priceUsd || price || 0;
+            const formatTrack = assignment.collectionType || subscription.collectionType || customer.collectionType || "unknown";
+            const cabinetUrl = process.env.CABINET_URL || "https://luciteriacabinet.com/app/cabinet";
+
+            await handleEmptyPool({
+              userId,
+              subscriptionContractId: contractId,
+              billingCycle,
+              creditAmount,
+              formatTrack,
+              cabinetUrl,
+            });
+
+            logger.info(MODULE, `Empty pool credit granted for ${customer.email} (${formatTrack}, cycle ${billingCycle})`);
+          }
+        }
+      } catch (e) {
+        // Fail open — never block the exception queue because of empty-pool handling.
+        logger.warn(MODULE, `Empty pool handling failed (exception still queued): ${e.message}`);
+      }
+    }
+
     return { shipment, assignment, draftOrder: null, exception };
   }
 
