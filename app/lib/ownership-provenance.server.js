@@ -103,6 +103,15 @@ export async function recordOwnership(userId, elementSymbol, format, options = {
       source === OWNERSHIP_SOURCE.STAFF_ENTERED;
 
     if (canUpdate) {
+      // FR-1/FR-2: the CollectionItem row is a per-element ANCHOR and holds only
+      // the PRIMARY format. A subscriber may own the same element in several
+      // formats (the FRD's 10mm-vs-25.4mm cube example). We must NOT overwrite a
+      // previously recorded primary format with a newly confirmed one — doing so
+      // silently discards the first format's ownership. Only set the primary
+      // when the row does not yet have one; every confirmed format (primary or
+      // additional) is persisted as an ElementSample child below so all formats
+      // survive and are seen by the exclusion engine.
+      const setPrimaryFormat = normalizedFormat && !existing.format;
       record = await prisma.collectionItem.update({
         where: { id: existing.id },
         data: {
@@ -111,9 +120,7 @@ export async function recordOwnership(userId, elementSymbol, format, options = {
           subscriberConfirmed,
           rejectedBySubscriber: false, // Clear rejection if re-confirming
           recordedAt: new Date(),
-          // Record the format track this ownership was confirmed against
-          // (only overwrite when a format is supplied).
-          ...(normalizedFormat ? { format: normalizedFormat } : {}),
+          ...(setPrimaryFormat ? { format: normalizedFormat } : {}),
         },
       });
     } else {
@@ -139,6 +146,23 @@ export async function recordOwnership(userId, elementSymbol, format, options = {
     });
   }
 
+  // FR-1/FR-2: persist THIS confirmed format as an ElementSample child of the
+  // per-element CollectionItem anchor. This is the fix for the write-path
+  // data-loss bug: because the CollectionItem row can only carry one primary
+  // format, additional formats of the same element would otherwise be lost. By
+  // recording every OWNED confirmation (primary AND additional) as a distinct
+  // sample, the exclusion engine — which unions CollectionItem.format with all
+  // ElementSample formats — correctly treats each (element, format) as its own
+  // ownable unit. Idempotent: at most one sample per (userId, collectionItem,
+  // format). Best-effort — never fail a confirm on sample bookkeeping.
+  if (state === "OWNED" && normalizedFormat) {
+    try {
+      await ensureElementSample(userId, record.id, canonical.sym, normalizedFormat, source);
+    } catch (e) {
+      /* non-fatal: primary format on the CollectionItem still covers this unit */
+    }
+  }
+
   // FR-6: if the subscriber is confirming ownership of a unit that was
   // previously rejected, supersede the active rejection rather than leaving two
   // contradictory active records. Best-effort — never fail a confirm on this.
@@ -155,6 +179,37 @@ export async function recordOwnership(userId, elementSymbol, format, options = {
   }
 
   return record;
+}
+
+/**
+ * FR-1/FR-2: ensure a single ElementSample exists for a confirmed
+ * (userId, collectionItemId, canonical format). Idempotent — re-confirming the
+ * same format is a no-op. This is what lets a subscriber own the same element
+ * in multiple physical formats (10mm cube AND 25.4mm cube) as distinct ownable
+ * units without one confirmation overwriting another.
+ *
+ * @param {string} userId
+ * @param {string} collectionItemId
+ * @param {string} elementSymbol - canonical symbol
+ * @param {string} normalizedFormat - canonical format id (e.g. "10mm_cube")
+ * @param {string} [source] - ownership source enum value
+ * @returns {Promise<Object|null>} the existing or created ElementSample
+ */
+export async function ensureElementSample(userId, collectionItemId, elementSymbol, normalizedFormat, source = null) {
+  if (!normalizedFormat) return null;
+  const existingSample = await prisma.elementSample.findFirst({
+    where: { userId, collectionItemId, format: normalizedFormat },
+  });
+  if (existingSample) return existingSample;
+  return prisma.elementSample.create({
+    data: {
+      userId,
+      collectionItemId,
+      elementSymbol,
+      format: normalizedFormat,
+      source: source || null,
+    },
+  });
 }
 
 /**

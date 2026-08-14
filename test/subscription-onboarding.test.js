@@ -295,3 +295,59 @@ test("recordRejection is idempotent and recordOwnership supersedes the active re
   active = await provenance.getActiveRejections("u1");
   assert.equal(active.size, 0, "confirming ownership supersedes the active rejection");
 });
+
+test("write path persists EVERY confirmed format as an ElementSample without overwriting the primary (FR-1/FR-2)", async () => {
+  resetPrisma({});
+
+  // Same element, two physical formats — the FRD's 10mm-vs-25.4mm cube example.
+  await provenance.recordOwnership("u1", "Fe", "10mm_cube", { state: "OWNED", contractId: "c1" });
+  await provenance.recordOwnership("u1", "Fe", "25.4mm_cube", { state: "OWNED", contractId: "c1" });
+
+  // Exactly ONE CollectionItem anchor for the element…
+  const items = await prisma.collectionItem.findMany({ where: { userId: "u1", elementSymbol: "Fe" } });
+  assert.equal(items.length, 1, "one CollectionItem row per element");
+  assert.equal(items[0].format, "10mm_cube", "primary format is NOT overwritten by the second confirmation");
+
+  // …and TWO ElementSample children, one per confirmed format (no data loss).
+  const samples = await prisma.elementSample.findMany({ where: { userId: "u1", elementSymbol: "Fe" } });
+  const sampleFormats = samples.map((s) => s.format).sort();
+  assert.deepEqual(sampleFormats, ["10mm_cube", "25.4mm_cube"]);
+
+  // Read + write now align: both formats are excluded from assignment.
+  const allProducts = [
+    { id: "p1", elementSymbol: "Fe", sku: "fe_10mm" },   // → 10mm_cube
+    { id: "p2", elementSymbol: "Fe", sku: "fe_25.4mm" }, // → 25.4mm_cube
+    { id: "p3", elementSymbol: "Au", sku: "au_10mm" },   // not owned
+  ];
+  const excluded = await manager.computeOnboardingExclusions("u1", allProducts, { confirmedOnly: false });
+  assert.deepEqual(excluded.sort(), ["p1", "p2"], "both owned formats excluded; unowned element still eligible");
+});
+
+test("ElementSample creation is idempotent — re-confirming the same format does not duplicate", async () => {
+  resetPrisma({});
+
+  await provenance.recordOwnership("u1", "Au", "10mm_cube", { state: "OWNED", contractId: "c1" });
+  await provenance.recordOwnership("u1", "Au", "10mm_cube", { state: "OWNED", contractId: "c1" });
+
+  const samples = await prisma.elementSample.findMany({ where: { userId: "u1", elementSymbol: "Au" } });
+  assert.equal(samples.length, 1, "same (element, format) confirmed twice → exactly one sample");
+});
+
+test("cross-webhook first-shipment claim: only one of two racing webhooks wins (FR-16/FR-17)", async () => {
+  // Both subscription/created and billing_attempt/succeeded ensure the SAME
+  // onboarding record, then race on the atomic claim. Exactly one may assign.
+  resetPrisma({
+    subscriptionOnboarding: [
+      { id: "ob1", subscriptionContractId: "c1", userId: "u1", status: "COMPLETE", firstAssignmentTriggered: false },
+    ],
+  });
+
+  const first = await onboarding.claimFirstAssignment("c1");
+  const second = await onboarding.claimFirstAssignment("c1");
+
+  assert.equal(first, true, "the first webhook to claim wins and assigns");
+  assert.equal(second, false, "the sibling webhook loses the claim and must NOT double-ship");
+
+  const row = await prisma.subscriptionOnboarding.findUnique({ where: { id: "ob1" } });
+  assert.equal(row.firstAssignmentTriggered, true, "claim is persisted as a check-and-set");
+});

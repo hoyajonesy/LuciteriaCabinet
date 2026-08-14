@@ -90,77 +90,14 @@ export async function handleSealSubCreated(payload) {
   }).catch((e) => logger.warn(MODULE, `user status update failed: ${e.message}`));
 
   const contractId = payload.subscriptionContractId || null;
-  const gateEnabled = await getFeatureFlag("feature_subscription_onboarding_gate");
 
-  // ─── 1. Initialize onboarding FIRST (FR-16) ───
-  // The onboarding record must exist BEFORE the first-assignment decision so the
-  // gate has something to evaluate. Idempotent — safe on webhook retries.
-  let onboardingId = null;
-  if (gateEnabled && contractId) {
-    try {
-      const { onboarding } = await ensureOnboardingForContract({
-        user,
-        customer,
-        subscription,
-        contractId,
-      });
-      onboardingId = onboarding?.id || null;
-    } catch (e) {
-      // Never let onboarding failures break the subscription-created flow.
-      logger.warn(MODULE, `onboarding init failed: ${e.message}`);
-    }
-  }
-
-  // ─── 2. Gate the first shipment (FR-16) ───
-  // The gate applies uniformly, including to the first shipment: a PENDING
-  // contract inside its grace window is HELD (no shipment) so we never risk
-  // shipping a duplicate the subscriber already owns. When the gate would BLOCK,
-  // we do NOT claim the first assignment — the eventual completion (FR-14) or
-  // backstop-fallback path fulfills this cycle later.
-  let held = false;
-  if (gateEnabled && contractId) {
-    try {
-      const gate = await resolveAssignmentGate({ userId: user.id, contractId, isFirstShipment: true });
-      if (gate.mode === GATE_MODE.BLOCKED) {
-        held = true;
-        logger.info(MODULE, `First shipment HELD pending onboarding for contract ${contractId}`);
-        await prisma.activityLog.create({
-          data: {
-            userId: user.id,
-            action: "assignment_held_onboarding",
-            details: JSON.stringify({
-              contractId,
-              onboardingId,
-              isFirstShipment: true,
-            }),
-          },
-        }).catch((e) => logger.warn(MODULE, `activity log (held) failed: ${e.message}`));
-      }
-    } catch (e) {
-      // Fail open — never block the first shipment because of a gate error.
-      logger.warn(MODULE, `first-shipment gate check failed (proceeding): ${e.message}`);
-    }
-  }
-
-  // ─── 3. Trigger the first shipment, guarded by the atomic claim (FR-17) ───
-  // claimFirstAssignment is an atomic check-and-set so the immediate trigger and
-  // the scheduled Assignment Engine batch can never both process the first
-  // cycle. It returns true for contracts with no onboarding record (feature off
-  // / legacy subs) — the legacy allow-through path.
-  let pipeline = { shipment: null, assignment: null, exception: null };
-  if (!held) {
-    const claimed = await claimFirstAssignment(contractId);
-    if (claimed) {
-      pipeline = await processShipmentAssignment({
-        customer,
-        subscription,
-        isFirstShipment: true,
-        assignedPrice: payload.amountCharged ?? payload.price ?? subscription.priceUsd,
-      });
-    } else {
-      logger.info(MODULE, `First assignment already claimed for contract ${contractId} — skipping duplicate trigger`);
-    }
-  }
+  const { onboardingId, held, pipeline } = await runGatedFirstAssignment({
+    user,
+    customer,
+    subscription,
+    contractId,
+    assignedPrice: payload.amountCharged ?? payload.price ?? subscription.priceUsd,
+  });
 
   return {
     subscriptionId: subscription.id,
@@ -172,6 +109,93 @@ export async function handleSealSubCreated(payload) {
     onboardingId,
     held,
   };
+}
+
+/**
+ * FR-16/FR-17: run the gated first-shipment sequence for a contract.
+ *
+ * This is the SINGLE code path that decides whether a contract's very first
+ * shipment goes out, and it is shared by BOTH webhook types that can trigger it
+ * — subscription/created and billing_attempt/succeeded. Sharing it is what
+ * closes the cross-webhook double-ship race: whichever webhook arrives first
+ * (in either order) ensures the onboarding record exists, then the atomic
+ * claimFirstAssignment check-and-set lets exactly one of them actually assign.
+ *
+ * Sequence (only meaningful when the gate flag is enabled and a contractId is
+ * present):
+ *   1. ensureOnboardingForContract — idempotent; guarantees the onboarding
+ *      record exists BEFORE the claim, so a billing_attempt/succeeded that
+ *      arrives BEFORE subscription/created can still be deduped.
+ *   2. resolveAssignmentGate — a PENDING contract inside its grace window is
+ *      HELD (no shipment), so we never ship a duplicate the subscriber owns.
+ *   3. claimFirstAssignment — atomic check-and-set. Exactly one caller wins and
+ *      runs processShipmentAssignment; the loser skips. Contracts with no
+ *      onboarding record (flag off / legacy) always win the claim (legacy
+ *      allow-through).
+ *
+ * @returns {Promise<{ onboardingId: string|null, held: boolean, claimed: boolean, pipeline: Object }>}
+ */
+async function runGatedFirstAssignment({ user, customer, subscription, contractId, assignedPrice }) {
+  const gateEnabled = await getFeatureFlag("feature_subscription_onboarding_gate");
+  const emptyPipeline = { shipment: null, assignment: null, exception: null };
+
+  // ─── 1. Ensure the onboarding record exists FIRST (FR-16) ───
+  let onboardingId = null;
+  if (gateEnabled && contractId) {
+    try {
+      const { onboarding } = await ensureOnboardingForContract({
+        user,
+        customer,
+        subscription,
+        contractId,
+      });
+      onboardingId = onboarding?.id || null;
+    } catch (e) {
+      // Never let onboarding failures break the subscription flow.
+      logger.warn(MODULE, `onboarding init failed: ${e.message}`);
+    }
+  }
+
+  // ─── 2. Gate the first shipment (FR-16) ───
+  let held = false;
+  if (gateEnabled && contractId) {
+    try {
+      const gate = await resolveAssignmentGate({ userId: user.id, contractId, isFirstShipment: true });
+      if (gate.mode === GATE_MODE.BLOCKED) {
+        held = true;
+        logger.info(MODULE, `First shipment HELD pending onboarding for contract ${contractId}`);
+        await prisma.activityLog.create({
+          data: {
+            userId: user.id,
+            action: "assignment_held_onboarding",
+            details: JSON.stringify({ contractId, onboardingId, isFirstShipment: true }),
+          },
+        }).catch((e) => logger.warn(MODULE, `activity log (held) failed: ${e.message}`));
+      }
+    } catch (e) {
+      // Fail open — never block the first shipment because of a gate error.
+      logger.warn(MODULE, `first-shipment gate check failed (proceeding): ${e.message}`);
+    }
+  }
+
+  // ─── 3. Trigger the first shipment, guarded by the atomic claim (FR-17) ───
+  let pipeline = emptyPipeline;
+  let claimed = false;
+  if (!held) {
+    claimed = await claimFirstAssignment(contractId);
+    if (claimed) {
+      pipeline = await processShipmentAssignment({
+        customer,
+        subscription,
+        isFirstShipment: true,
+        assignedPrice,
+      });
+    } else {
+      logger.info(MODULE, `First assignment already claimed for contract ${contractId} — skipping duplicate trigger`);
+    }
+  }
+
+  return { onboardingId, held, claimed, pipeline };
 }
 
 /**
@@ -495,19 +519,49 @@ export async function handleBillingSuccess(payload) {
     .update({ where: { id: user.id }, data: { subscriptionStatus: "ACTIVE" } })
     .catch(() => {});
 
-  // Run the assignment pipeline for this billing cycle.
+  const assignedPrice = payload.amountCharged ?? subscription.priceUsd;
+
+  // FR-16/FR-17: the FIRST shipment must go through the SAME gated,
+  // atomically-claimed path that subscription/created uses. Seal realistically
+  // fires BOTH subscription/created and billing_attempt/succeeded for the same
+  // initial charge; without a shared claim the two webhook TYPES race and can
+  // double-ship. runGatedFirstAssignment ensures the onboarding record exists
+  // (so a billing event that arrives before subscription/created can still be
+  // deduped) and then lets exactly one caller win the claim.
+  if (isFirstShipment) {
+    const { held, claimed, pipeline } = await runGatedFirstAssignment({
+      user,
+      customer,
+      subscription,
+      contractId: payload.subscriptionContractId || null,
+      assignedPrice,
+    });
+    return {
+      subscriptionId: subscription.id,
+      shipmentId: pipeline.shipment?.id || null,
+      assigned: pipeline.assignment?.product?.sku || null,
+      isFirstShipment: true,
+      held,
+      // The sibling subscription/created webhook already claimed & shipped.
+      alreadyClaimed: !held && !claimed,
+      requiresReview: Boolean(pipeline.exception),
+    };
+  }
+
+  // Renewals: run the assignment pipeline for this billing cycle. The renewal
+  // gate (BACKSTOP_ONLY / flag-off logging) lives inside processShipmentAssignment.
   const pipeline = await processShipmentAssignment({
     customer,
     subscription,
-    isFirstShipment,
-    assignedPrice: payload.amountCharged ?? subscription.priceUsd,
+    isFirstShipment: false,
+    assignedPrice,
   });
 
   return {
     subscriptionId: subscription.id,
     shipmentId: pipeline.shipment?.id || null,
     assigned: pipeline.assignment?.product?.sku || null,
-    isFirstShipment,
+    isFirstShipment: false,
     requiresReview: Boolean(pipeline.exception),
   };
 }
