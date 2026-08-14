@@ -97,92 +97,64 @@ function calculateDiscount(retailPrice, subscriptionCost) {
 }
 
 /**
- * Main assignment function (Phase 2 enhanced)
- * 
+ * Compute the eligible candidate pool (FR-34).
+ *
+ * Runs the shared narrowing pipeline (Steps 1–4) that both the automatic
+ * assignment engine AND the Swap & Skip Window picker must agree on: active +
+ * in-stock, collection-type match, subscription-eligibility, precious-metal
+ * exclusion, duplicate handling, and category/format/budget preferences.
+ *
+ * Extracting this guarantees the swap picker only ever offers items the engine
+ * itself would consider eligible — no divergence between "what we'd auto-assign"
+ * and "what you're allowed to swap to".
+ *
  * @param {Object} params
- * @param {Object} params.customer - Customer record with id, collectionType
- * @param {Array}  params.ownedProductIds - IDs of products customer already owns
- * @param {Array}  params.shippedProductIds - IDs of products previously sent via subscription
- * @param {Object} params.preferences - Customer preference settings
- * @param {Array}  params.wishlistProductIds - IDs of products on customer's wishlist
- * @param {Array}  params.allProducts - All products with current inventory
- * @param {string} params.strategy - Assignment strategy to use
- * @param {string} params.collectionType - Customer's collection type (10mm, 25.4mm, 50mm, lucite, ampoules)
- * @param {number} params.subscriptionPrice - Monthly subscription price for discount calc
- * @param {string} params.manualOverrideProductId - Admin override: force this product
- * @param {Object} params.tier - Optional subscription tier config (excludePreciousMetals, maxDiscountPercent, requireSubscriptionEligible)
- * @returns {Object} { success, product, reason, requiresManualReview, exception, discount, alerts, audit }
+ * @param {Object} params.customer
+ * @param {Array}  params.ownedProductIds
+ * @param {Array}  params.shippedProductIds
+ * @param {Object} params.preferences
+ * @param {Array}  params.allProducts
+ * @param {string} params.collectionType
+ * @param {Object} params.tier
+ * @param {Array}  [params.alerts] - optional alerts array to append to (shared with caller)
+ * @returns {Object} { success, candidates, audit, result }
+ *   - success=true  → { success, candidates, audit }
+ *   - success=false → { success, candidates:[], audit, result } where `result` is
+ *                      the full failure object assignNextItem should return.
  */
-function assignNextItem({
+function computeEligiblePool({
   customer,
   ownedProductIds = [],
   shippedProductIds = [],
   preferences = {},
-  wishlistProductIds = [],
   allProducts = [],
-  strategy = STRATEGIES.WISHLIST_PRIORITY,
   collectionType = null,
-  subscriptionPrice = null,
-  manualOverrideProductId = null,
   tier = null,
+  alerts = [],
 }) {
   const duplicateMode = preferences.duplicateHandling || DUPLICATE_MODES.NEVER;
-  const alerts = [];
   const ct = collectionType || customer?.collectionType || "lucite";
 
-  // Tier-driven constraints (fall back to safe subscription defaults).
   const excludePreciousMetals = tier?.excludePreciousMetals !== false; // default true
   const requireSubscriptionEligible = tier?.requireSubscriptionEligible !== false; // default true
-  const maxDiscount = typeof tier?.maxDiscountPercent === "number" ? tier.maxDiscountPercent : DISCOUNT_ALERT_THRESHOLD;
 
-  // Audit trail — records how the candidate pool narrows at each step so admins
-  // can understand *why* a particular item was (or was not) assigned.
   const audit = [];
   const trace = (step, remaining, note) => audit.push({ step, remaining, note });
 
-  // ── Manual Override ────────────────────────────────────────
-  if (manualOverrideProductId) {
-    const overrideProduct = allProducts.find((p) => p.id === manualOverrideProductId);
-    if (!overrideProduct) {
-      return {
-        success: false,
-        product: null,
-        reason: "Manual override product not found",
-        requiresManualReview: true,
-        exception: { reason: "override_failed", details: `Product ${manualOverrideProductId} not found` },
-        alerts,
-        audit: [{ step: "manual_override", remaining: 0, note: `Product ${manualOverrideProductId} not found` }],
-      };
-    }
-    const discountPct = calculateDiscount(overrideProduct.retailPrice || overrideProduct.priceUsd, subscriptionPrice);
-    if (discountPct > maxDiscount) {
-      alerts.push({
-        type: "high_discount_override",
-        severity: discountPct > DISCOUNT_HARD_CAP ? "critical" : "warning",
-        message: `Manual override: ${overrideProduct.elementSymbol} has ${(discountPct * 100).toFixed(1)}% discount (retail $${(overrideProduct.retailPrice || overrideProduct.priceUsd).toFixed(2)} vs subscription $${subscriptionPrice})`,
-        discountPct,
-      });
-    }
-    return {
-      success: true,
-      product: overrideProduct,
-      reason: "Manual admin override",
-      requiresManualReview: false,
-      flags: ["manual_override"],
-      alternates: [],
-      exception: null,
-      discount: {
-        retailPrice: overrideProduct.retailPrice || overrideProduct.priceUsd,
-        subscriptionCost: subscriptionPrice,
-        discountPct,
-        exceedsThreshold: discountPct > maxDiscount,
-      },
+  const fail = (reason, details) => ({
+    success: false,
+    candidates: [],
+    audit,
+    result: {
+      success: false,
+      product: null,
+      reason,
+      requiresManualReview: true,
+      exception: { reason: "no_eligible_items", details },
       alerts,
-      audit: [
-        { step: "manual_override", remaining: 1, note: `Admin forced product ${overrideProduct.sku} (${overrideProduct.elementSymbol})` },
-      ],
-    };
-  }
+      audit,
+    },
+  });
 
   // ── Step 1: Start with in-stock active products ───────────
   trace("start", allProducts.length, `All products supplied for collection "${ct}"`);
@@ -192,18 +164,10 @@ function assignNextItem({
   trace("active_in_stock", candidates.length, "Active status AND inventoryQty > 0");
 
   if (candidates.length === 0) {
-    return {
-      success: false,
-      product: null,
-      reason: "No products currently in stock",
-      requiresManualReview: true,
-      exception: {
-        reason: "no_eligible_items",
-        details: `No in-stock products available for ${customer.firstName} ${customer.lastName}`,
-      },
-      alerts,
-      audit,
-    };
+    return fail(
+      "No products currently in stock",
+      `No in-stock products available for ${customer.firstName} ${customer.lastName}`
+    );
   }
 
   // ── Step 1b: Filter by collection type (tier constraint) ──
@@ -212,43 +176,25 @@ function assignNextItem({
     trace("collection_type", candidates.length, `Matching collection type "${ct}"`);
 
     if (candidates.length === 0) {
-      return {
-        success: false,
-        product: null,
-        reason: `No in-stock products available for collection type "${ct}"`,
-        requiresManualReview: true,
-        exception: {
-          reason: "no_eligible_items",
-          details: `No in-stock products matching collection type "${ct}" for ${customer.firstName} ${customer.lastName}`,
-        },
-        alerts,
-        audit,
-      };
+      return fail(
+        `No in-stock products available for collection type "${ct}"`,
+        `No in-stock products matching collection type "${ct}" for ${customer.firstName} ${customer.lastName}`
+      );
     }
   }
 
   // ── Step 1c: Require subscription-eligible SKUs ───────────
   if (requireSubscriptionEligible) {
     const beforeEligible = candidates.length;
-    // Only enforce when the flag is actually present on the products. This keeps
-    // older/simpler product fixtures (without the field) working.
     const anyHaveFlag = candidates.some((p) => typeof p.availableForSubscription === "boolean");
     if (anyHaveFlag) {
       candidates = candidates.filter((p) => p.availableForSubscription === true);
       trace("subscription_eligible", candidates.length, `availableForSubscription === true (removed ${beforeEligible - candidates.length})`);
       if (candidates.length === 0) {
-        return {
-          success: false,
-          product: null,
-          reason: `No subscription-eligible products for collection type "${ct}"`,
-          requiresManualReview: true,
-          exception: {
-            reason: "no_eligible_items",
-            details: `All ${ct} products are flagged availableForSubscription=false for ${customer.firstName} ${customer.lastName}`,
-          },
-          alerts,
-          audit,
-        };
+        return fail(
+          `No subscription-eligible products for collection type "${ct}"`,
+          `All ${ct} products are flagged availableForSubscription=false for ${customer.firstName} ${customer.lastName}`
+        );
       }
     }
   }
@@ -268,18 +214,10 @@ function assignNextItem({
     trace("exclude_precious_metals", candidates.length, "Removed Re, Rh, Au, Os, Ru, Pd, Ir, Pt (Ag allowed)");
 
     if (candidates.length === 0) {
-      return {
-        success: false,
-        product: null,
-        reason: "All remaining candidates are precious metals (excluded from subscription)",
-        requiresManualReview: true,
-        exception: {
-          reason: "no_eligible_items",
-          details: `Only precious metals remain for ${customer.firstName} — subscription cannot auto-assign these`,
-        },
-        alerts,
-        audit,
-      };
+      return fail(
+        "All remaining candidates are precious metals (excluded from subscription)",
+        `Only precious metals remain for ${customer.firstName} — subscription cannot auto-assign these`
+      );
     }
   }
 
@@ -340,19 +278,112 @@ function assignNextItem({
 
   // ── Step 4: Check if any candidates remain ────────────────
   if (candidates.length === 0) {
+    return fail(
+      `No eligible items for ${customer.firstName} after applying preferences, collection type, and duplicate rules`,
+      `${customer.firstName} ${customer.lastName} (${ct}) — all eligible items are either owned, shipped, out of stock, precious metals, or excluded by preferences. Owned: ${ownedProductIds.length}, Total: ${allProducts.length}`
+    );
+  }
+
+  return { success: true, candidates, audit };
+}
+
+/**
+ * Main assignment function (Phase 2 enhanced)
+ * 
+ * @param {Object} params
+ * @param {Object} params.customer - Customer record with id, collectionType
+ * @param {Array}  params.ownedProductIds - IDs of products customer already owns
+ * @param {Array}  params.shippedProductIds - IDs of products previously sent via subscription
+ * @param {Object} params.preferences - Customer preference settings
+ * @param {Array}  params.wishlistProductIds - IDs of products on customer's wishlist
+ * @param {Array}  params.allProducts - All products with current inventory
+ * @param {string} params.strategy - Assignment strategy to use
+ * @param {string} params.collectionType - Customer's collection type (10mm, 25.4mm, 50mm, lucite, ampoules)
+ * @param {number} params.subscriptionPrice - Monthly subscription price for discount calc
+ * @param {string} params.manualOverrideProductId - Admin override: force this product
+ * @param {Object} params.tier - Optional subscription tier config (excludePreciousMetals, maxDiscountPercent, requireSubscriptionEligible)
+ * @returns {Object} { success, product, reason, requiresManualReview, exception, discount, alerts, audit }
+ */
+function assignNextItem({
+  customer,
+  ownedProductIds = [],
+  shippedProductIds = [],
+  preferences = {},
+  wishlistProductIds = [],
+  allProducts = [],
+  strategy = STRATEGIES.WISHLIST_PRIORITY,
+  collectionType = null,
+  subscriptionPrice = null,
+  manualOverrideProductId = null,
+  tier = null,
+}) {
+  const alerts = [];
+  const ct = collectionType || customer?.collectionType || "lucite";
+
+  // Tier-driven discount threshold (fall back to safe subscription default).
+  const maxDiscount = typeof tier?.maxDiscountPercent === "number" ? tier.maxDiscountPercent : DISCOUNT_ALERT_THRESHOLD;
+
+  // ── Manual Override ────────────────────────────────────────
+  if (manualOverrideProductId) {
+    const overrideProduct = allProducts.find((p) => p.id === manualOverrideProductId);
+    if (!overrideProduct) {
+      return {
+        success: false,
+        product: null,
+        reason: "Manual override product not found",
+        requiresManualReview: true,
+        exception: { reason: "override_failed", details: `Product ${manualOverrideProductId} not found` },
+        alerts,
+        audit: [{ step: "manual_override", remaining: 0, note: `Product ${manualOverrideProductId} not found` }],
+      };
+    }
+    const discountPct = calculateDiscount(overrideProduct.retailPrice || overrideProduct.priceUsd, subscriptionPrice);
+    if (discountPct > maxDiscount) {
+      alerts.push({
+        type: "high_discount_override",
+        severity: discountPct > DISCOUNT_HARD_CAP ? "critical" : "warning",
+        message: `Manual override: ${overrideProduct.elementSymbol} has ${(discountPct * 100).toFixed(1)}% discount (retail $${(overrideProduct.retailPrice || overrideProduct.priceUsd).toFixed(2)} vs subscription $${subscriptionPrice})`,
+        discountPct,
+      });
+    }
     return {
-      success: false,
-      product: null,
-      reason: `No eligible items for ${customer.firstName} after applying preferences, collection type, and duplicate rules`,
-      requiresManualReview: true,
-      exception: {
-        reason: "no_eligible_items",
-        details: `${customer.firstName} ${customer.lastName} (${ct}) — all eligible items are either owned, shipped, out of stock, precious metals, or excluded by preferences. Owned: ${ownedProductIds.length}, Total: ${allProducts.length}`,
+      success: true,
+      product: overrideProduct,
+      reason: "Manual admin override",
+      requiresManualReview: false,
+      flags: ["manual_override"],
+      alternates: [],
+      exception: null,
+      discount: {
+        retailPrice: overrideProduct.retailPrice || overrideProduct.priceUsd,
+        subscriptionCost: subscriptionPrice,
+        discountPct,
+        exceedsThreshold: discountPct > maxDiscount,
       },
       alerts,
-      audit,
+      audit: [
+        { step: "manual_override", remaining: 1, note: `Admin forced product ${overrideProduct.sku} (${overrideProduct.elementSymbol})` },
+      ],
     };
   }
+
+  // ── Steps 1–4: Compute the eligible candidate pool ────────
+  // Shared with the Swap & Skip Window picker (FR-34) so the swap options and
+  // the auto-assignment engine never diverge.
+  const pool = computeEligiblePool({
+    customer,
+    ownedProductIds,
+    shippedProductIds,
+    preferences,
+    allProducts,
+    collectionType,
+    tier,
+    alerts,
+  });
+  if (!pool.success) return pool.result;
+  let candidates = pool.candidates;
+  const audit = pool.audit;
+  const trace = (step, remaining, note) => audit.push({ step, remaining, note });
 
   // ── Step 5: Rank by strategy ──────────────────────────────
   let ranked;
@@ -599,6 +630,7 @@ function shuffleArray(arr) {
 
 export {
   assignNextItem,
+  computeEligiblePool,
   previewSequence,
   shiftForOutOfStock,
   calculateDiscount,
