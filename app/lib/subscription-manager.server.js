@@ -243,6 +243,48 @@ export async function runAssignment({
 }
 
 /**
+ * Finalize a shipment (FR-33).
+ *
+ * Creates the Shopify draft order — the single, irreversible fulfillment step
+ * that transitions a shipment to "ordered". Both the automatic assignment flow
+ * (`processShipmentAssignment`) and the manual-override flow
+ * (`applyManualOverride`) go through here so there is exactly one seam where the
+ * Swap & Skip Window can defer finalization (hold the shipment in
+ * "held_for_swap") until the customer's decision window closes.
+ *
+ * This helper never throws: it returns any error so callers keep their existing
+ * exception-handling behavior.
+ *
+ * @param {Object} params
+ * @param {Object} params.customer
+ * @param {Object} params.product
+ * @param {Object} params.shipment
+ * @param {number} params.assignedPrice
+ * @param {boolean} [params.isFirstShipment]
+ * @returns {Promise<{ draftOrder: (object|null), error: (Error|null) }>}
+ */
+export async function finalizeShipment({
+  customer,
+  product,
+  shipment,
+  assignedPrice,
+  isFirstShipment = false,
+}) {
+  try {
+    const draftOrder = await createSubscriptionDraftOrder({
+      customer,
+      product,
+      shipment,
+      assignedPrice,
+      isFirstShipment,
+    });
+    return { draftOrder, error: null };
+  } catch (err) {
+    return { draftOrder: null, error: err };
+  }
+}
+
+/**
  * Full pipeline: create a shipment, run assignment, and either create a draft
  * order (auto-approve) or open an admin exception.
  *
@@ -407,22 +449,20 @@ export async function processShipmentAssignment({
     return { shipment: freshShipment, assignment, draftOrder: null, exception };
   }
 
-  // 5. Auto-approved → create the Shopify draft order.
-  let draftOrder = null;
-  try {
-    draftOrder = await createSubscriptionDraftOrder({
-      customer,
-      product,
-      shipment,
-      assignedPrice: price,
-      isFirstShipment,
-    });
-  } catch (err) {
-    logger.error(MODULE, `Draft order creation failed for shipment ${shipment.id}`, err);
+  // 5. Auto-approved → finalize (create the Shopify draft order, FR-33).
+  const { draftOrder, error: finalizeError } = await finalizeShipment({
+    customer,
+    product,
+    shipment,
+    assignedPrice: price,
+    isFirstShipment,
+  });
+  if (finalizeError) {
+    logger.error(MODULE, `Draft order creation failed for shipment ${shipment.id}`, finalizeError);
     await openException({
       customer,
       reason: "inventory_conflict",
-      details: `Draft order creation failed for ${product.title}: ${err.message}`,
+      details: `Draft order creation failed for ${product.title}: ${finalizeError.message}`,
     });
   }
 
@@ -655,19 +695,20 @@ export async function applyManualOverride({
     })
     .catch((e) => logger.warn(MODULE, `preview update on override failed: ${e.message}`));
 
-  // Create the Shopify draft order for the new product (unless one exists).
+  // Finalize: create the Shopify draft order for the new product (unless one
+  // already exists), via the shared seam (FR-33).
   let draftOrder = null;
   if (createDraft && !shipment.shopifyDraftOrderId) {
-    try {
-      draftOrder = await createSubscriptionDraftOrder({
-        customer,
-        product,
-        shipment,
-        assignedPrice: shipment.assignedPrice ?? subscription.priceUsd,
-        isFirstShipment: /first/i.test(shipment.notes || ""),
-      });
-    } catch (err) {
-      logger.error(MODULE, `Draft order creation failed after override for ${shipmentId}`, err);
+    const { draftOrder: created, error: finalizeError } = await finalizeShipment({
+      customer,
+      product,
+      shipment,
+      assignedPrice: shipment.assignedPrice ?? subscription.priceUsd,
+      isFirstShipment: /first/i.test(shipment.notes || ""),
+    });
+    draftOrder = created;
+    if (finalizeError) {
+      logger.error(MODULE, `Draft order creation failed after override for ${shipmentId}`, finalizeError);
     }
   }
 
