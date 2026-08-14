@@ -97,9 +97,11 @@ export const action = async ({ request, params }) => {
         admin.name ||
         [admin.firstName, admin.lastName].filter(Boolean).join(" ").trim() ||
         admin.email;
+      const staffNote = (form.get("staffNote") || "").toString().trim();
       await markOnboardingCompleteByAdmin({
         onboardingId: String(onboardingId),
         staff: { id: admin.id, email: admin.email, name: staffName },
+        staffNote: staffNote || null,
       });
       return json({ ok: true, message: "Onboarding marked complete." });
     } catch (e) {
@@ -297,16 +299,38 @@ export default function AdminUserDetail() {
                   </div>
                 )}
 
-                {/* Manual completion (FR-28) */}
-                {ob.status !== 'COMPLETE' && (
-                  <Form method="post" onSubmit={(e) => {
-                    if (!confirm("Mark this subscriber's onboarding as complete? This trusts their current owned-items state for assignment.")) e.preventDefault();
-                  }}>
-                    <input type="hidden" name="intent" value="mark-onboarding-complete" />
-                    <input type="hidden" name="onboardingId" value={ob.id} />
-                    <button type="submit" style={styles.markCompleteBtn}>Mark Onboarding Complete</button>
-                  </Form>
-                )}
+                {/* Manual completion (FR-28/FR-29) */}
+                {ob.status !== 'COMPLETE' && (() => {
+                  const hasConfirmedChanges = (ob.provenanceItems || []).some(
+                    p => p.subscriberConfirmed || p.rejectedBySubscriber
+                  );
+                  return (
+                    <Form method="post" onSubmit={(e) => {
+                      const note = (e.currentTarget.staffNote?.value || "").trim();
+                      if (!hasConfirmedChanges && !note) {
+                        e.preventDefault();
+                        alert("No confirmed ownership changes exist for this contract. Record an explicit 'no changes confirmed' reason before completing (FR-29).");
+                        return;
+                      }
+                      if (!confirm("Mark this subscriber's onboarding as complete? This trusts their current owned-items state for assignment.")) e.preventDefault();
+                    }}>
+                      <input type="hidden" name="intent" value="mark-onboarding-complete" />
+                      <input type="hidden" name="onboardingId" value={ob.id} />
+                      <div style={styles.metaLabel}>
+                        Staff note{hasConfirmedChanges ? " (optional)" : " (required — no confirmed changes on this contract)"}
+                      </div>
+                      <textarea
+                        name="staffNote"
+                        rows={2}
+                        placeholder={hasConfirmedChanges
+                          ? "Optional note about this manual completion."
+                          : "Explain the no-change outcome (e.g. 'Subscriber confirmed by phone they own nothing in this track')."}
+                        style={styles.staffNoteInput}
+                      />
+                      <button type="submit" style={styles.markCompleteBtn}>Mark Onboarding Complete</button>
+                    </Form>
+                  );
+                })()}
               </div>
             ))}
           </div>
@@ -787,5 +811,17 @@ const styles = {
     fontSize: 13,
     fontWeight: 600,
     cursor: 'pointer',
+  },
+  staffNoteInput: {
+    display: 'block',
+    width: '100%',
+    boxSizing: 'border-box',
+    margin: '4px 0 8px',
+    padding: '8px 10px',
+    borderRadius: 8,
+    border: '1px solid var(--luc-border, #d1d5db)',
+    fontSize: 13,
+    fontFamily: 'inherit',
+    resize: 'vertical',
   },
 };

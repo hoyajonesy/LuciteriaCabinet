@@ -27,6 +27,13 @@ import { grantCarryForwardCredit } from "./credits.server.js";
 
 const MODULE = "subscription-onboarding";
 
+/**
+ * FR-31: process-lifetime dedupe so the "flag OFF while PENDING records exist"
+ * decision is logged at most once per contract (per process), never on every
+ * assignment call. Keyed by contractId ("__global__" when none is supplied).
+ */
+const _flagOffDecisionLogged = new Set();
+
 /** Default grace window: bounded fulfillment promise (FR-6). */
 export const GRACE_WINDOW_DAYS = 6;
 
@@ -168,10 +175,17 @@ export async function ensureOnboardingForContract({
  * Also performs the lazy PENDING → BACKSTOP_ONLY transition once the grace
  * window has expired.
  *
+ * FR-16/P1b: gating applies UNIFORMLY to the first shipment and to renewals —
+ * a PENDING contract inside its grace window is BLOCKED regardless of which
+ * shipment it is. The bounded-fulfillment promise (FR-13) is honoured by the
+ * first-assignment trigger that runs once onboarding COMPLETES or the grace
+ * window expires into BACKSTOP_ONLY, NOT by letting the first shipment bypass
+ * the gate (which would risk the exact duplicate this feature prevents).
+ *
  * @param {Object} params
  * @param {string} params.userId
  * @param {string} params.contractId
- * @param {boolean} [params.isFirstShipment] - First shipment always proceeds (FR-13).
+ * @param {boolean} [params.isFirstShipment] - Retained for logging/telemetry; no longer bypasses the gate.
  * @returns {Promise<{ mode: string, onboarding: object|null }>}
  */
 export async function resolveAssignmentGate({ userId, contractId, isFirstShipment = false }) {
@@ -180,11 +194,6 @@ export async function resolveAssignmentGate({ userId, contractId, isFirstShipmen
   // No onboarding record (feature off, or legacy sub) → behave normally.
   if (!onboarding) {
     return { mode: GATE_MODE.NORMAL, onboarding: null };
-  }
-
-  // First shipment is the bounded fulfillment promise — always proceeds (FR-13).
-  if (isFirstShipment) {
-    return { mode: GATE_MODE.NORMAL, onboarding };
   }
 
   if (onboarding.status === ONBOARDING_STATUS.COMPLETE) {
@@ -447,20 +456,46 @@ export async function runOnboardingGraceJob({ now = new Date() } = {}) {
 }
 
 /**
- * Admin-triggered manual completion of an onboarding record (FR-28).
+ * Admin-triggered manual completion of an onboarding record (FR-28/FR-29).
  * Sets status COMPLETE + completedAt, records staff attribution to ActivityLog.
+ *
+ * FR-29: this action MUST NOT leave the record's ownership data ambiguous. It
+ * may only complete the record when EITHER (a) confirmed/rejected ownership
+ * changes exist for this contract (the staff saved the customer's described
+ * state), OR (b) the staff records an explicit "no ownership changes confirmed"
+ * reason (staffNote). Completing with neither is rejected.
  *
  * @param {Object} params
  * @param {string} params.onboardingId
  * @param {Object} params.staff - Admin object from requireAdmin ({ id, email, name }).
+ * @param {string} [params.staffNote] - Explicit reason; required when no ownership changes were confirmed.
  * @returns {Promise<object>} the updated onboarding record
  */
-export async function markOnboardingCompleteByAdmin({ onboardingId, staff }) {
+export async function markOnboardingCompleteByAdmin({ onboardingId, staff, staffNote = null }) {
   const onboarding = await prisma.subscriptionOnboarding.findUnique({
     where: { id: onboardingId },
   });
   if (!onboarding) {
     throw new Error(`No onboarding record ${onboardingId}`);
+  }
+
+  const note = (staffNote || "").trim();
+
+  // FR-29: count the ownership changes this contract actually produced —
+  // subscriber-confirmed owned items OR explicit rejections. If none exist and
+  // no staff note explains the no-change outcome, refuse to complete.
+  const confirmedChanges = await prisma.collectionItem.count({
+    where: {
+      userId: onboarding.userId,
+      sourceSubscriptionContractId: onboarding.subscriptionContractId,
+      OR: [{ subscriberConfirmed: true }, { rejectedBySubscriber: true }],
+    },
+  });
+
+  if (confirmedChanges === 0 && !note) {
+    throw new Error(
+      "Cannot mark complete: no confirmed ownership changes for this contract. Record an explicit reason (staff note) describing the no-change outcome (FR-29)."
+    );
   }
 
   const from = onboarding.status;
@@ -469,6 +504,7 @@ export async function markOnboardingCompleteByAdmin({ onboardingId, staff }) {
     data: {
       status: ONBOARDING_STATUS.COMPLETE,
       completedAt: onboarding.completedAt || new Date(),
+      ...(note ? { staffNote: note } : {}),
     },
   });
 
@@ -477,13 +513,98 @@ export async function markOnboardingCompleteByAdmin({ onboardingId, staff }) {
     contractId: onboarding.subscriptionContractId,
     from,
     to: ONBOARDING_STATUS.COMPLETE,
+    confirmedChanges,
+    staffNote: note || null,
     staffId: staff?.id || null,
     staffEmail: staff?.email || null,
     staffName: staff?.name || null,
   });
 
-  logger.info(MODULE, `Onboarding ${onboardingId} marked COMPLETE by admin ${staff?.email || "unknown"}`);
+  logger.info(MODULE, `Onboarding ${onboardingId} marked COMPLETE by admin ${staff?.email || "unknown"}`, {
+    confirmedChanges,
+    hasStaffNote: Boolean(note),
+  });
   return updated;
+}
+
+/**
+ * FR-16/FR-17: atomic check-and-set claim for a contract's first assignment.
+ *
+ * The immediate first-assignment trigger and the scheduled Assignment Engine
+ * batch may both attempt to process the same contract's first cycle. This claim
+ * is a single-statement conditional UPDATE (updateMany WHERE
+ * firstAssignmentTriggered = false) so exactly one caller can win the race —
+ * the winner gets `true`, everyone else gets `false` and MUST NOT assign.
+ *
+ * Contracts with no onboarding record (feature off, or legacy sub) are not
+ * gated by this mechanism and always return `true`.
+ *
+ * @param {string} contractId
+ * @returns {Promise<boolean>} true if THIS caller won the claim
+ */
+export async function claimFirstAssignment(contractId) {
+  if (!contractId) return true;
+  const onboarding = await getOnboardingByContract(contractId);
+  if (!onboarding) return true; // no gate for this contract
+
+  const res = await prisma.subscriptionOnboarding.updateMany({
+    where: { id: onboarding.id, firstAssignmentTriggered: false },
+    data: { firstAssignmentTriggered: true },
+  });
+  const won = res.count === 1;
+  if (won) {
+    logger.info(MODULE, `First-assignment claim WON for contract ${contractId}`);
+  } else {
+    logger.info(MODULE, `First-assignment already claimed for contract ${contractId} — skipping duplicate`);
+  }
+  return won;
+}
+
+/**
+ * FR-31: record the intentional decision that the onboarding gate flag is OFF
+ * while PENDING onboarding records still exist. Disabling the flag MUST NOT
+ * silently change the behaviour of in-flight PENDING contracts — this makes the
+ * situation an explicit, logged decision rather than an implicit side effect.
+ *
+ * Logs at most once per contract per process (module-level Set) so it never
+ * floods the logs on every assignment call.
+ *
+ * @param {string} [contractId]
+ * @returns {Promise<{ logged: boolean, pendingCount: number }>}
+ */
+export async function noteFlagOffDecision(contractId) {
+  const key = contractId || "__global__";
+  if (_flagOffDecisionLogged.has(key)) {
+    return { logged: false, pendingCount: -1 };
+  }
+  _flagOffDecisionLogged.add(key);
+
+  let pendingCount = 0;
+  try {
+    pendingCount = await prisma.subscriptionOnboarding.count({
+      where: { status: ONBOARDING_STATUS.PENDING },
+    });
+  } catch (e) {
+    logger.warn(MODULE, `noteFlagOffDecision count failed: ${e.message}`);
+    return { logged: false, pendingCount: -1 };
+  }
+
+  if (pendingCount > 0) {
+    logger.warn(
+      MODULE,
+      `Onboarding gate flag is OFF while ${pendingCount} PENDING onboarding record(s) exist — ` +
+        `these contracts are NOT being gated. Handling in-flight PENDING records at flag-toggle ` +
+        `time must be an intentional, logged decision (FR-31).`,
+      { contractId: contractId || null, pendingCount }
+    );
+    return { logged: true, pendingCount };
+  }
+  return { logged: false, pendingCount };
+}
+
+/** Test-only: reset the FR-31 flag-off dedupe set. */
+export function _resetFlagOffDecisionLog() {
+  _flagOffDecisionLogged.clear();
 }
 
 /**

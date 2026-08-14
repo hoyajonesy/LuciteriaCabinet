@@ -18,7 +18,7 @@
 // Standard periodic table row/col positions
 // Rows 1-7 = main table, row 9 = lanthanides, row 10 = actinides
 
-import { CANONICAL_ELEMENTS } from "./periodic-canonical";
+import { CANONICAL_ELEMENTS } from "./periodic-canonical.js";
 import { buildElements118 } from "./elements-transform.server.js";
 import { buildElements118FromDbRows } from "./elements-db.server.js";
 import { prisma } from "../lib/db.server.js";

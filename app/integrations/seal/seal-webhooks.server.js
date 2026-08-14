@@ -24,7 +24,12 @@ import {
 } from "./seal-subscription-sync.server.js";
 import { SEAL_EVENTS } from "./seal-types.js";
 import { getFeatureFlag } from "../../lib/feature-flags.server.js";
-import { ensureOnboardingForContract } from "../../lib/subscription-onboarding.server.js";
+import {
+  ensureOnboardingForContract,
+  resolveAssignmentGate,
+  claimFirstAssignment,
+  GATE_MODE,
+} from "../../lib/subscription-onboarding.server.js";
 
 const MODULE = "seal-webhooks";
 
@@ -84,33 +89,77 @@ export async function handleSealSubCreated(payload) {
     data: { isSubscriber: true, subscriptionStatus: "ACTIVE" },
   }).catch((e) => logger.warn(MODULE, `user status update failed: ${e.message}`));
 
-  // Trigger the first shipment assignment immediately (FR-13: bounded
-  // fulfillment promise — the first shipment always goes out, regardless of
-  // onboarding state).
-  const pipeline = await processShipmentAssignment({
-    customer,
-    subscription,
-    isFirstShipment: true,
-    assignedPrice: payload.amountCharged ?? payload.price ?? subscription.priceUsd,
-  });
+  const contractId = payload.subscriptionContractId || null;
+  const gateEnabled = await getFeatureFlag("feature_subscription_onboarding_gate");
 
-  // Kick off the owned-items onboarding flow (gated behind a feature flag).
-  // Idempotent — safe on webhook retries (FR-16).
+  // ─── 1. Initialize onboarding FIRST (FR-16) ───
+  // The onboarding record must exist BEFORE the first-assignment decision so the
+  // gate has something to evaluate. Idempotent — safe on webhook retries.
   let onboardingId = null;
-  try {
-    const gateEnabled = await getFeatureFlag("feature_subscription_onboarding_gate");
-    if (gateEnabled && payload.subscriptionContractId) {
+  if (gateEnabled && contractId) {
+    try {
       const { onboarding } = await ensureOnboardingForContract({
         user,
         customer,
         subscription,
-        contractId: payload.subscriptionContractId,
+        contractId,
       });
       onboardingId = onboarding?.id || null;
+    } catch (e) {
+      // Never let onboarding failures break the subscription-created flow.
+      logger.warn(MODULE, `onboarding init failed: ${e.message}`);
     }
-  } catch (e) {
-    // Never let onboarding failures break the subscription-created flow.
-    logger.warn(MODULE, `onboarding init failed: ${e.message}`);
+  }
+
+  // ─── 2. Gate the first shipment (FR-16) ───
+  // The gate applies uniformly, including to the first shipment: a PENDING
+  // contract inside its grace window is HELD (no shipment) so we never risk
+  // shipping a duplicate the subscriber already owns. When the gate would BLOCK,
+  // we do NOT claim the first assignment — the eventual completion (FR-14) or
+  // backstop-fallback path fulfills this cycle later.
+  let held = false;
+  if (gateEnabled && contractId) {
+    try {
+      const gate = await resolveAssignmentGate({ userId: user.id, contractId, isFirstShipment: true });
+      if (gate.mode === GATE_MODE.BLOCKED) {
+        held = true;
+        logger.info(MODULE, `First shipment HELD pending onboarding for contract ${contractId}`);
+        await prisma.activityLog.create({
+          data: {
+            userId: user.id,
+            action: "assignment_held_onboarding",
+            details: JSON.stringify({
+              contractId,
+              onboardingId,
+              isFirstShipment: true,
+            }),
+          },
+        }).catch((e) => logger.warn(MODULE, `activity log (held) failed: ${e.message}`));
+      }
+    } catch (e) {
+      // Fail open — never block the first shipment because of a gate error.
+      logger.warn(MODULE, `first-shipment gate check failed (proceeding): ${e.message}`);
+    }
+  }
+
+  // ─── 3. Trigger the first shipment, guarded by the atomic claim (FR-17) ───
+  // claimFirstAssignment is an atomic check-and-set so the immediate trigger and
+  // the scheduled Assignment Engine batch can never both process the first
+  // cycle. It returns true for contracts with no onboarding record (feature off
+  // / legacy subs) — the legacy allow-through path.
+  let pipeline = { shipment: null, assignment: null, exception: null };
+  if (!held) {
+    const claimed = await claimFirstAssignment(contractId);
+    if (claimed) {
+      pipeline = await processShipmentAssignment({
+        customer,
+        subscription,
+        isFirstShipment: true,
+        assignedPrice: payload.amountCharged ?? payload.price ?? subscription.priceUsd,
+      });
+    } else {
+      logger.info(MODULE, `First assignment already claimed for contract ${contractId} — skipping duplicate trigger`);
+    }
   }
 
   return {
@@ -121,6 +170,7 @@ export async function handleSealSubCreated(payload) {
     assigned: pipeline.assignment?.product?.sku || null,
     requiresReview: Boolean(pipeline.exception),
     onboardingId,
+    held,
   };
 }
 

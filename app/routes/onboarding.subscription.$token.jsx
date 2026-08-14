@@ -22,6 +22,12 @@ import {
 } from "../lib/subscription-onboarding.server.js";
 import { ELEMENTS_118 } from "../data/elements.server.js";
 import { normaliseFormat, formatLabel } from "../lib/formats.js";
+import { ElementPickerGrid } from "../components/ElementPickerModal";
+// NOTE: WireframePeriodicTable was the original onboarding picker. Per FR-11 the
+// onboarding UI now reuses the Passport search/filter/multi-select foundation
+// (ElementPickerGrid) instead — no five-item cap, no fixed periodic-table order.
+// The periodic-table component remains available for other views.
+// eslint-disable-next-line no-unused-vars
 import WireframePeriodicTable from "../components/WireframePeriodicTable";
 
 export const loader = async ({ request, params }) => {
@@ -163,28 +169,27 @@ export default function SubscriptionOnboarding() {
 
   const { userName, formatLabel: fmtLabel, suggestedSymbols, elements, contractId } = data;
 
-  // Pre-select suggestions from order history.
+  // Pre-select suggestions from order history (FR-12).
   const [owned, setOwned] = useState(() => new Set(suggestedSymbols));
+  const [search, setSearch] = useState("");
 
-  const visibleElements = useMemo(
-    () => elements.map((el) => ({ ...el, elementName: el.name, available: true })),
+  // Adapt ELEMENTS_118 to the shared picker's item shape. There is NO selection
+  // cap here (FR-11) and no fixed periodic-table ordering.
+  const pickerItems = useMemo(
+    () => elements.map((el) => ({ uid: el.sym, symbol: el.sym, name: el.name })),
     [elements]
   );
+
+  const suggestedSet = useMemo(() => new Set(suggestedSymbols), [suggestedSymbols]);
 
   const toggle = (el) => {
     setOwned((prev) => {
       const next = new Set(prev);
-      if (next.has(el.sym)) next.delete(el.sym);
-      else next.add(el.sym);
+      if (next.has(el.symbol)) next.delete(el.symbol);
+      else next.add(el.symbol);
       return next;
     });
   };
-
-  const states = useMemo(() => {
-    const s = {};
-    owned.forEach((sym) => { s[sym] = "OWNED"; });
-    return s;
-  }, [owned]);
 
   const ownedCount = owned.size;
 
@@ -216,21 +221,29 @@ export default function SubscriptionOnboarding() {
           </div>
         )}
 
-        <section className="bg-gray-50 border border-gray-200 rounded p-1.5 md:p-4 mb-7 relative">
-          <div className="onb-ptable overflow-x-auto">
-            <WireframePeriodicTable
-              elements={visibleElements}
-              states={states}
-              showChecks
-              onCellClick={toggle}
-            />
-          </div>
+        <section className="bg-gray-50 border border-gray-200 rounded p-3 md:p-4 mb-7">
+          <ElementPickerGrid
+            items={pickerItems}
+            isSelected={(el) => owned.has(el.symbol)}
+            onToggle={toggle}
+            search={search}
+            onSearchChange={setSearch}
+            maxSelectable={null}
+            selectedCount={ownedCount}
+            isSuggested={(el) => suggestedSet.has(el.symbol)}
+            emptyText="No elements are available for this track yet."
+            noMatchText={`No elements match "${search}".`}
+            searchPlaceholder="Search by element name or symbol…"
+          />
           <div className="flex items-center gap-4 mt-4 pt-3 border-t border-gray-200">
             <span className="flex items-center gap-1.5 text-xs text-gray-500">
-              <span className="w-3 h-3 rounded-sm border-2 border-green-500 inline-block" /> Owned (selected)
+              <i className="fa-solid fa-circle-check text-luc-blue" /> Owned (selected)
             </span>
             <span className="flex items-center gap-1.5 text-xs text-gray-500">
-              <span className="w-3 h-3 rounded-sm border border-gray-300 inline-block" /> Not owned
+              <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">
+                <i className="fa-solid fa-wand-magic-sparkles mr-1" />Suggested
+              </span>
+              from your order history
             </span>
           </div>
         </section>

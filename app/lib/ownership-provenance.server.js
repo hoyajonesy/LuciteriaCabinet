@@ -24,6 +24,34 @@ export const OWNERSHIP_SOURCE = {
 };
 
 /**
+ * Rejection reason enum values (v1.3 §4.3).
+ */
+export const REJECTION_REASON = {
+  ONBOARDING_DECLINED: "ONBOARDING_DECLINED",
+  GIFT: "GIFT",
+  NO_LONGER_OWNED: "NO_LONGER_OWNED",
+  OTHER: "OTHER",
+};
+
+/**
+ * FR-1/FR-2: build the single normalized "ownable unit" identity used
+ * consistently across order-history seeding, Cabinet owned-items, Passport, and
+ * Assignment Engine exclusion matching. Element symbol is lower-cased and the
+ * physical format is canonicalised so "Fe" + "10mm" and "fe" + "10mm_cube"
+ * resolve to the same identity ("fe|10mm_cube"). A null format is represented
+ * explicitly as "null" so it can never collide with a real format.
+ *
+ * @param {string} elementSymbol
+ * @param {string|null} format
+ * @returns {string} ownableUnitId (e.g. "fe|10mm_cube")
+ */
+export function ownableUnitId(elementSymbol, format) {
+  const sym = String(elementSymbol || "").toLowerCase();
+  const fmt = format ? normaliseFormat(format) : null;
+  return `${sym}|${fmt || "null"}`;
+}
+
+/**
  * FR-1: Resolve element symbol and atomic number from CANONICAL_ELEMENTS
  */
 function resolveCanonicalElement(elementSymbol) {
@@ -67,6 +95,7 @@ export async function recordOwnership(userId, elementSymbol, format, options = {
     },
   });
 
+  let record;
   if (existing) {
     // Only update if this is the same onboarding session (same contract) or a staff override
     const canUpdate = 
@@ -74,7 +103,7 @@ export async function recordOwnership(userId, elementSymbol, format, options = {
       source === OWNERSHIP_SOURCE.STAFF_ENTERED;
 
     if (canUpdate) {
-      return prisma.collectionItem.update({
+      record = await prisma.collectionItem.update({
         where: { id: existing.id },
         data: {
           state,
@@ -89,39 +118,90 @@ export async function recordOwnership(userId, elementSymbol, format, options = {
       });
     } else {
       // FR-5: Don't modify records from other sessions
-      return existing;
+      record = existing;
+    }
+  } else {
+    // Create new record with full provenance
+    record = await prisma.collectionItem.create({
+      data: {
+        userId,
+        elementSymbol: canonical.sym,
+        elementName: canonical.name,
+        atomicNumber: canonical.z,
+        format: normalizedFormat,
+        state,
+        ownershipSource: source,
+        recordedAt: new Date(),
+        subscriberConfirmed,
+        sourceSubscriptionContractId: contractId,
+        rejectedBySubscriber: false,
+      },
+    });
+  }
+
+  // FR-6: if the subscriber is confirming ownership of a unit that was
+  // previously rejected, supersede the active rejection rather than leaving two
+  // contradictory active records. Best-effort — never fail a confirm on this.
+  if (state === "OWNED") {
+    try {
+      await supersedeActiveRejections(
+        userId,
+        ownableUnitId(canonical.sym, normalizedFormat),
+        `collectionItem:${record.id}`
+      );
+    } catch {
+      /* non-fatal: exclusion logic also intersects OWNED with active rejections */
     }
   }
 
-  // Create new record with full provenance
-  return prisma.collectionItem.create({
-    data: {
-      userId,
-      elementSymbol: canonical.sym,
-      elementName: canonical.name,
-      atomicNumber: canonical.z,
-      format: normalizedFormat,
-      state,
-      ownershipSource: source,
-      recordedAt: new Date(),
-      subscriberConfirmed,
-      sourceSubscriptionContractId: contractId,
-      rejectedBySubscriber: false,
-    },
+  return record;
+}
+
+/**
+ * FR-6: mark any ACTIVE rejection for (userId, ownableUnitId) as superseded.
+ * @returns {Promise<number>} number of rejections superseded
+ */
+export async function supersedeActiveRejections(userId, ouid, supersededBy) {
+  const res = await prisma.ownershipRejection.updateMany({
+    where: { userId, ownableUnitId: ouid, supersededAt: null },
+    data: { supersededAt: new Date(), supersededBy: supersededBy || "confirmed" },
   });
+  return res.count;
 }
 
 /**
  * FR-4: Record an explicit rejection (user declined a suggested item during onboarding).
  * A rejected item MUST NOT be re-trusted by any part of the system, including BACKSTOP_ONLY.
  */
-export async function recordRejection(userId, elementSymbol, format, contractId) {
+export async function recordRejection(userId, elementSymbol, format, contractId, reason = REJECTION_REASON.ONBOARDING_DECLINED) {
   const canonical = resolveCanonicalElement(elementSymbol);
   if (!canonical) {
     throw new Error(`Unknown element: ${elementSymbol}`);
   }
 
   const normalizedFormat = format ? normaliseFormat(format) : null;
+
+  // v1.3 §4.3 / FR-6: the rejection's source of truth is a dedicated
+  // OwnershipRejection row. Idempotent — if an ACTIVE rejection already exists
+  // for this (userId, ownableUnitId) we leave it in place (the DB partial
+  // unique index enforces at most one active row per unit).
+  const ouid = ownableUnitId(canonical.sym, normalizedFormat);
+  const activeRejection = await prisma.ownershipRejection.findFirst({
+    where: { userId, ownableUnitId: ouid, supersededAt: null },
+  });
+  if (!activeRejection) {
+    await prisma.ownershipRejection.create({
+      data: {
+        userId,
+        ownableUnitId: ouid,
+        reason,
+        sourceSubscriptionContractId: contractId || null,
+        recordedAt: new Date(),
+        supersededAt: null,
+        supersededBy: null,
+      },
+    });
+  }
 
   // Check if there's already a record (one row per element).
   const existing = await prisma.collectionItem.findFirst({
@@ -208,18 +288,35 @@ export async function getRejectedItems(userId) {
 
 /**
  * Check if a specific element+format was explicitly rejected by the user.
+ * Sources the answer from the dedicated OwnershipRejection model (FR-6),
+ * considering only ACTIVE (non-superseded) rejections.
  */
 export async function isRejected(userId, elementSymbol, format) {
   const canonical = resolveCanonicalElement(elementSymbol);
   if (!canonical) return false;
 
-  const item = await prisma.collectionItem.findFirst({
-    where: {
-      userId,
-      elementSymbol: canonical.sym,
-      rejectedBySubscriber: true,
-    },
+  const normalizedFormat = format ? normaliseFormat(format) : null;
+  const ouid = ownableUnitId(canonical.sym, normalizedFormat);
+  const active = await prisma.ownershipRejection.findFirst({
+    where: { userId, ownableUnitId: ouid, supersededAt: null },
   });
+  return Boolean(active);
+}
 
-  return Boolean(item);
+/**
+ * FR-4/FR-6: return the set of ACTIVE ownableUnitId strings the user has
+ * rejected (supersededAt IS NULL). Used by the Assignment Engine exclusion
+ * logic so a rejected unit is never re-trusted as owned, including under the
+ * BACKSTOP_ONLY fallback.
+ *
+ * @param {string} userId
+ * @returns {Promise<Set<string>>} set of active ownableUnitId values
+ */
+export async function getActiveRejections(userId) {
+  if (!userId) return new Set();
+  const rows = await prisma.ownershipRejection.findMany({
+    where: { userId, supersededAt: null },
+    select: { ownableUnitId: true },
+  });
+  return new Set(rows.map((r) => r.ownableUnitId));
 }

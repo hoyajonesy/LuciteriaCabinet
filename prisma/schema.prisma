@@ -106,6 +106,7 @@ model User {
 
   // ─── Subscription Onboarding relationship ───
   subscriptionOnboardings SubscriptionOnboarding[]
+  ownershipRejections     OwnershipRejection[]
 
   @@index([email])
   @@index([wishlistToken])
@@ -1134,11 +1135,20 @@ model SubscriptionOnboarding {
   status                   String    @default("PENDING") // PENDING, COMPLETE, BACKSTOP_ONLY
   seededFromOrderHistory   Boolean   @default(false)
   remindersSent            Int       @default(0)
-  
+
+  // FR-16/FR-17: atomic check-and-set guard so the immediate first-assignment
+  // trigger and the scheduled Assignment Engine batch never both process the
+  // same contract's first cycle (idempotency across the two paths).
+  firstAssignmentTriggered Boolean   @default(false)
+
   graceExpiresAt           DateTime // createdAt + grace window (default 6 days)
   graceRemainingSeconds    Int? // Set when paused while PENDING (FR-25)
   
   completedAt              DateTime?
+
+  // FR-29: explicit "no ownership changes confirmed" reason recorded when staff
+  // manually complete an onboarding without confirming owned items.
+  staffNote                String?
   
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
@@ -1147,6 +1157,37 @@ model SubscriptionOnboarding {
   @@index([status])
   @@index([subscriptionContractId])
   @@index([graceExpiresAt])
+}
+
+// ─── OwnershipRejection (v1.3 §4.3, FR-6) ───────────────────
+// A rejection is a distinct assertion from ownership ("the subscriber does NOT
+// own this"). Persisted in its own model — never a status on the ownership
+// record — so it can't be lost or misinterpreted. The (userId, ownableUnitId)
+// pair is unique among ACTIVE (supersededAt IS NULL) rows (enforced at the DB
+// level via a partial unique index, see the ownership_rejection_model migration).
+// When a subscriber later confirms ownership of a previously rejected unit, the
+// existing rejection is superseded (supersededAt/supersededBy) rather than
+// leaving two contradictory active records.
+model OwnershipRejection {
+  id                           String    @id @default(cuid())
+  userId                       String
+  user                         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  ownableUnitId                String // Normalized identity from FR-1/FR-2 ("fe|10mm_cube")
+  recordedAt                   DateTime  @default(now())
+  reason                       String    @default("ONBOARDING_DECLINED") // ONBOARDING_DECLINED, GIFT, NO_LONGER_OWNED, OTHER
+  sourceSubscriptionContractId String? // Onboarding contract this rejection originated from, if any
+
+  supersededAt                 DateTime? // Set if a later customer action reverses this rejection
+  supersededBy                 String? // Reference describing what reversed it (e.g. the ownership record id)
+
+  createdAt                    DateTime  @default(now())
+  updatedAt                    DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([userId, ownableUnitId])
+  @@index([supersededAt])
+  @@index([sourceSubscriptionContractId])
 }
 
 // ─── BillingEvent ───────────────────────────────────────────

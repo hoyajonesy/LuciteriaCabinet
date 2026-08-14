@@ -24,9 +24,9 @@ import {
 import { createSubscriptionDraftOrder } from "../integrations/seal/seal-draft-orders.server.js";
 import { getTierByCollectionType } from "./subscription-tiers-db.server.js";
 import { getFeatureFlag } from "./feature-flags.server.js";
-import { resolveAssignmentGate, GATE_MODE, handleEmptyPool } from "./subscription-onboarding.server.js";
+import { resolveAssignmentGate, GATE_MODE, handleEmptyPool, claimFirstAssignment, noteFlagOffDecision } from "./subscription-onboarding.server.js";
 import { canonicalFormatFromSku } from "./seed-order-history.server.js";
-import { normaliseFormat } from "./formats.js";
+import { ownableUnitId, getActiveRejections } from "./ownership-provenance.server.js";
 
 const MODULE = "subscription-manager";
 
@@ -52,7 +52,7 @@ async function resolveUserIdForCustomer(customer) {
  * trust subscriberConfirmed items; unconfirmed order-history suggestions are
  * NOT excluded (we would rather risk a duplicate than skip an owed item).
  */
-async function computeOnboardingExclusions(userId, allProducts, { confirmedOnly }) {
+export async function computeOnboardingExclusions(userId, allProducts, { confirmedOnly }) {
   if (!userId) return [];
 
   const owned = await prisma.collectionItem.findMany({
@@ -65,18 +65,44 @@ async function computeOnboardingExclusions(userId, allProducts, { confirmedOnly 
     select: { elementSymbol: true, format: true },
   });
 
-  if (owned.length === 0) return [];
-
-  // Build a lookup set of "symbol|canonicalFormat" for owned items.
+  // FR-1/FR-2: an owned CollectionItem row carries only the PRIMARY format, but
+  // a collector may physically own the same element in several formats. The
+  // per-specimen truth lives in ElementSample children. Query those samples for
+  // the owned elements and add each sample's own format to the exclusion set so
+  // e.g. owning both a 10mm cube AND an ampoule of iron excludes BOTH products,
+  // not just the primary format. (Matching on element symbol alone is forbidden
+  // by FR-1 — every key is element + canonical format.)
   const ownedKeys = new Set(
-    owned.map((o) => `${o.elementSymbol.toLowerCase()}|${o.format ? normaliseFormat(o.format) : "null"}`)
+    owned.map((o) => ownableUnitId(o.elementSymbol, o.format))
   );
+
+  const ownedSymbols = Array.from(new Set(owned.map((o) => o.elementSymbol)));
+  if (ownedSymbols.length > 0) {
+    const samples = await prisma.elementSample.findMany({
+      where: { userId, elementSymbol: { in: ownedSymbols } },
+      select: { elementSymbol: true, format: true },
+    });
+    for (const s of samples) {
+      if (!s.elementSymbol) continue;
+      // ElementSample.format uses the raw size token ("10mm", "ampoules");
+      // ownableUnitId canonicalises it so it aligns with product SKU formats.
+      ownedKeys.add(ownableUnitId(s.elementSymbol, s.format));
+    }
+  }
+
+  // FR-4/FR-6: a rejected unit MUST NOT be treated as owned by any code path,
+  // including here. Remove any active rejection from the owned-exclusion set so
+  // the engine can still ship a unit the subscriber told us they do NOT own.
+  const activeRejections = await getActiveRejections(userId);
+  for (const rejectedKey of activeRejections) ownedKeys.delete(rejectedKey);
+
+  if (ownedKeys.size === 0) return [];
 
   const excludedIds = [];
   for (const p of allProducts) {
     if (!p.elementSymbol || !p.sku) continue;
     const canonicalFmt = canonicalFormatFromSku(p.sku);
-    const key = `${p.elementSymbol.toLowerCase()}|${canonicalFmt ? normaliseFormat(canonicalFmt) : "null"}`;
+    const key = ownableUnitId(p.elementSymbol, canonicalFmt);
     if (ownedKeys.has(key)) excludedIds.push(p.id);
   }
   return excludedIds;
@@ -235,33 +261,37 @@ export async function processShipmentAssignment({
 }) {
   const price = assignedPrice ?? subscription.priceUsd ?? 0;
 
-  // ─── Onboarding gate (FR-15) ───
-  // For renewal shipments (not the first), hold assignment while the subscriber
-  // is still within the onboarding grace window and hasn't completed. The first
-  // shipment is the bounded fulfillment promise and always proceeds (FR-13).
-  if (!isFirstShipment) {
-    try {
-      const gateEnabled = await getFeatureFlag("feature_subscription_onboarding_gate");
-      if (gateEnabled) {
-        const contractId = subscription?.appstleContractId || subscription?.shopifyContractId || null;
-        const userId = await resolveUserIdForCustomer(customer);
-        const gate = await resolveAssignmentGate({ userId, contractId, isFirstShipment });
-        if (gate.mode === GATE_MODE.BLOCKED) {
-          logger.info(MODULE, `Assignment BLOCKED pending onboarding for contract ${contractId}`);
-          return {
-            shipment: null,
-            assignment: null,
-            draftOrder: null,
-            exception: null,
-            blocked: true,
-            gateMode: gate.mode,
-          };
-        }
+  // ─── Onboarding gate (FR-15/FR-16/FR-17) ───
+  // The gate applies UNIFORMLY to every shipment, including the first (FR-16):
+  // if the subscriber is still within the onboarding grace window and hasn't
+  // completed, assignment is held (BLOCKED). There is no first-shipment bypass.
+  // When the feature flag is OFF, the decision to allow assignment through
+  // unguarded is intentional and must be logged, not silent (FR-31).
+  const gateContractId =
+    subscription?.appstleContractId || subscription?.shopifyContractId || null;
+  try {
+    const gateEnabled = await getFeatureFlag("feature_subscription_onboarding_gate");
+    if (gateEnabled) {
+      const userId = await resolveUserIdForCustomer(customer);
+      const gate = await resolveAssignmentGate({ userId, contractId: gateContractId, isFirstShipment });
+      if (gate.mode === GATE_MODE.BLOCKED) {
+        logger.info(MODULE, `Assignment BLOCKED pending onboarding for contract ${gateContractId}`);
+        return {
+          shipment: null,
+          assignment: null,
+          draftOrder: null,
+          exception: null,
+          blocked: true,
+          gateMode: gate.mode,
+        };
       }
-    } catch (e) {
-      // Fail open — never block fulfillment because of a gate error.
-      logger.warn(MODULE, `Onboarding gate check failed (proceeding): ${e.message}`);
+    } else {
+      // Flag-off: record the intentional allow-through decision (FR-31).
+      await noteFlagOffDecision(gateContractId);
     }
+  } catch (e) {
+    // Fail open — never block fulfillment because of a gate error.
+    logger.warn(MODULE, `Onboarding gate check failed (proceeding): ${e.message}`);
   }
 
   // 1. Create the shipment shell (status: scheduled).

@@ -11,6 +11,7 @@ import { useLoaderData, useActionData, Form, Link, useNavigation } from "@remix-
 import { useState, useEffect, useMemo } from "react";
 import AppNav from "../components/AppNav";
 import Toast from "../components/Toast";
+import ElementPickerModal from "../components/ElementPickerModal";
 import { getUserId } from "../lib/session.server";
 import { getUserById } from "../lib/auth.server";
 import { requireNotFrozen } from "../lib/frozen-guard.server";
@@ -216,14 +217,6 @@ export default function PassportPage() {
   }, [featureParam]);
 
   const selectedUids = useMemo(() => new Set(selected.map((s) => s.uid)), [selected]);
-
-  const filteredOwned = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return ownedElements;
-    return ownedElements.filter(
-      (o) => o.name.toLowerCase().includes(q) || o.symbol.toLowerCase().includes(q)
-    );
-  }, [ownedElements, search]);
 
   const toggleElement = (el) => {
     setSelected((prev) => {
@@ -483,116 +476,56 @@ export default function PassportPage() {
         </div>
       </main>
 
-      {/* Featured picker modal */}
-      {pickerOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-              <h3 className="luc-heading text-base font-medium">
-                Choose Featured Elements
-                <span className="text-sm text-gray-400 font-normal ml-2">
-                  {selected.length}/{maxFeatured} selected
-                </span>
-              </h3>
-              <button type="button" onClick={() => setPickerOpen(false)} className="text-gray-400 hover:text-gray-600">
-                <i className="fa-solid fa-xmark text-lg" />
-              </button>
-            </div>
-
-            <div className="px-6 py-3 border-b border-gray-100">
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search your owned elements…"
-                className="w-full text-sm border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-luc-blue"
-              />
-            </div>
-
-            <div className="flex-1 overflow-y-auto px-6 py-4">
-              {ownedElements.length === 0 ? (
-                <p className="text-sm text-gray-500 text-center py-10">
-                  You don't own any elements yet. Add items to your collection first.
-                </p>
-              ) : filteredOwned.length === 0 ? (
-                <p className="text-sm text-gray-500 text-center py-10">No elements match "{search}".</p>
-              ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  {filteredOwned.map((el) => {
-                    const isSel = selectedUids.has(el.uid);
-                    const disabled = !isSel && selected.length >= maxFeatured;
-                    return (
-                      <button
-                        key={el.uid}
-                        type="button"
-                        onClick={() => toggleElement(el)}
-                        disabled={disabled}
-                        className={`flex items-center gap-3 border rounded-lg p-2.5 text-left transition-colors ${
-                          isSel
-                            ? "border-luc-blue bg-blue-50"
-                            : disabled
-                            ? "border-gray-100 opacity-50 cursor-not-allowed"
-                            : "border-gray-200 hover:border-gray-300"
-                        }`}
-                      >
-                        <div className="w-11 h-11 rounded-md bg-gray-100 border border-gray-200 overflow-hidden flex items-center justify-center flex-shrink-0">
-                          {el.imageUrl ? (
-                            <img src={el.imageUrl} alt={el.name} className="w-full h-full object-cover" />
-                          ) : (
-                            <span className="text-sm font-semibold luc-heading">{el.symbol}</span>
-                          )}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium text-gray-800 truncate">{el.name}</p>
-                          <p className="text-xs text-gray-400 truncate">
-                            {el.symbol}{el.formatName ? ` · ${el.formatName}` : ""}
-                          </p>
-                        </div>
-                        {el.isWishlisted && (
-                          <span className="text-[10px] bg-pink-100 text-pink-700 px-1.5 py-0.5 rounded-full flex-shrink-0">
-                            <i className="fa-solid fa-heart mr-1" />Wishlist
-                          </span>
-                        )}
-                        {isSel && <i className="fa-solid fa-circle-check text-luc-blue flex-shrink-0" />}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200">
+      {/* Featured picker modal — shared search/filter/multi-select foundation (FR-11) */}
+      <ElementPickerModal
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        title="Choose Featured Elements"
+        headerRight={`${selected.length}/${maxFeatured} selected`}
+        gridProps={{
+          items: ownedElements,
+          isSelected: (el) => selectedUids.has(el.uid),
+          onToggle: toggleElement,
+          search,
+          onSearchChange: setSearch,
+          maxSelectable: maxFeatured,
+          selectedCount: selected.length,
+          emptyText: "You don't own any elements yet. Add items to your collection first.",
+          noMatchText: `No elements match "${search}".`,
+          searchPlaceholder: "Search your owned elements…",
+        }}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setSelected([])}
+              className="text-sm text-gray-500 hover:text-gray-700"
+            >
+              Clear all
+            </button>
+            <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => setSelected([])}
-                className="text-sm text-gray-500 hover:text-gray-700"
+                onClick={() => setPickerOpen(false)}
+                className="text-sm border border-gray-300 bg-white text-gray-700 px-4 py-2 rounded-md hover:bg-gray-50"
               >
-                Clear all
+                Cancel
               </button>
-              <div className="flex gap-2">
+              <Form method="post" onSubmit={() => setPickerOpen(false)}>
+                <input type="hidden" name="intent" value="save-featured" />
+                <input type="hidden" name="featured" value={JSON.stringify(selected)} />
                 <button
-                  type="button"
-                  onClick={() => setPickerOpen(false)}
-                  className="text-sm border border-gray-300 bg-white text-gray-700 px-4 py-2 rounded-md hover:bg-gray-50"
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="text-sm bg-luc-blue hover:bg-luc-blue-hover transition-colors text-white px-5 py-2 rounded-btn disabled:opacity-60"
                 >
-                  Cancel
+                  Save Featured
                 </button>
-                <Form method="post" onSubmit={() => setPickerOpen(false)}>
-                  <input type="hidden" name="intent" value="save-featured" />
-                  <input type="hidden" name="featured" value={JSON.stringify(selected)} />
-                  <button
-                    type="submit"
-                    disabled={isSubmitting}
-                    className="text-sm bg-luc-blue hover:bg-luc-blue-hover transition-colors text-white px-5 py-2 rounded-btn disabled:opacity-60"
-                  >
-                    Save Featured
-                  </button>
-                </Form>
-              </div>
+              </Form>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        }
+      />
 
       {/* Share modal */}
       {shareOpen && publicUrl && (

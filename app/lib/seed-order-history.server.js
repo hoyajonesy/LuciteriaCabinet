@@ -13,6 +13,38 @@
 
 import { prisma } from "./db.server.js";
 import { OWNERSHIP_SOURCE } from "./ownership-provenance.server.js";
+import { shopifyClient } from "../integrations/shopify/shopify-client.server.js";
+import { logger } from "./error-handling.server.js";
+
+const MODULE = "seed-order-history";
+
+/**
+ * GraphQL query for a customer's prior orders. We only ask for the fields we
+ * need to establish FR-8 ownership evidence: financial + fulfillment status and
+ * each line item's variant SKU (the FR-2 stable identity anchor).
+ */
+const CUSTOMER_ORDERS_QUERY = `
+query OnboardingCustomerOrders($query: String!, $cursor: String) {
+  orders(first: 50, after: $cursor, query: $query, sortKey: PROCESSED_AT) {
+    edges {
+      cursor
+      node {
+        id
+        displayFinancialStatus
+        displayFulfillmentStatus
+        lineItems(first: 100) {
+          edges {
+            node {
+              quantity
+              variant { sku legacyResourceId }
+            }
+          }
+        }
+      }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}`;
 
 /**
  * Derive canonical format from SKU using the same rules as elements-db.server.js
@@ -74,11 +106,85 @@ function elementSymbolFromSku(sku) {
 export async function seedFromOrderHistory(shopifyCustomerId, formatTrack) {
   if (!shopifyCustomerId) return [];
 
-  // Get all products from DB (synced from Shopify)
+  // Resolve the format track once (e.g. "10mm" → "10mm_cube", "lucite" → "lucite_cube").
+  const trackNormalized = formatTrack.replace("mm", "mm_cube").replace("lucite", "lucite_cube");
+  const matchesTrack = (fmt) => fmt && (fmt === trackNormalized || fmt === formatTrack);
+
+  // ─── FR-9/FR-8: fetch the customer's REAL prior order history ───
+  // Ownership evidence comes from the subscriber's actual paid + fulfilled
+  // orders — NOT from the full active-product catalog. Seeding from the catalog
+  // would fabricate "you own this" suggestions for items the subscriber never
+  // bought, which is exactly the false-positive this feature must avoid.
+  const numericCustomerId = String(shopifyCustomerId).split("/").pop();
+  const searchQuery = `customer_id:${numericCustomerId} financial_status:paid fulfillment_status:fulfilled`;
+
+  const purchasedSkus = new Set();
+  try {
+    let cursor = null;
+    let pages = 0;
+    const MAX_PAGES = 20; // safety bound on pagination
+    // eslint-disable-next-line no-constant-condition
+    while (pages < MAX_PAGES) {
+      const resp = await shopifyClient.graphql(CUSTOMER_ORDERS_QUERY, {
+        query: searchQuery,
+        cursor,
+      });
+
+      // Prototype/mock client (or a misconfigured production client) returns no
+      // order data. FR-9: an empty picker is a VALID state, not an error — but
+      // we must NOT silently substitute the catalog. Warn loudly and return [].
+      const ordersConn = resp?.data?.orders;
+      if (!ordersConn) {
+        if (resp?._mock) {
+          logger.warn(
+            MODULE,
+            `Shopify order-history seeding unavailable (mock/prototype client) for customer ${numericCustomerId} — ` +
+              `starting onboarding picker empty. No suggestions will be fabricated from the catalog (FR-9).`
+          );
+        } else {
+          logger.warn(
+            MODULE,
+            `Shopify orders query returned no data for customer ${numericCustomerId} — starting picker empty (FR-9).`
+          );
+        }
+        return [];
+      }
+
+      for (const edge of ordersConn.edges || []) {
+        const node = edge?.node;
+        if (!node) continue;
+        // Double-guard on status in code (defensive, in case the search filter
+        // is loosened): only paid + fulfilled orders are evidence (FR-8).
+        const fin = String(node.displayFinancialStatus || "").toUpperCase();
+        const ful = String(node.displayFulfillmentStatus || "").toUpperCase();
+        if (fin !== "PAID" && fin !== "PARTIALLY_REFUNDED") continue;
+        if (ful !== "FULFILLED" && ful !== "PARTIALLY_FULFILLED") continue;
+
+        for (const liEdge of node.lineItems?.edges || []) {
+          const sku = liEdge?.node?.variant?.sku;
+          if (sku) purchasedSkus.add(String(sku));
+        }
+      }
+
+      if (!ordersConn.pageInfo?.hasNextPage) break;
+      cursor = ordersConn.pageInfo.endCursor;
+      pages++;
+    }
+  } catch (e) {
+    // FR-9: never let a Shopify failure fabricate suggestions. Empty is valid.
+    logger.warn(MODULE, `Order-history fetch failed for customer ${numericCustomerId} (starting empty): ${e.message}`);
+    return [];
+  }
+
+  if (purchasedSkus.size === 0) {
+    logger.info(MODULE, `No qualifying prior orders for customer ${numericCustomerId} — picker starts empty (FR-9).`);
+    return [];
+  }
+
+  // Map purchased SKUs → catalog Product records (stable identity, FR-2), then
+  // filter to the current format track and dedupe by element+format.
   const products = await prisma.product.findMany({
-    where: {
-      status: "Active", // Only consider active products
-    },
+    where: { sku: { in: Array.from(purchasedSkus) } },
     select: {
       id: true,
       sku: true,
@@ -86,38 +192,27 @@ export async function seedFromOrderHistory(shopifyCustomerId, formatTrack) {
       elementSymbol: true,
       elementName: true,
       atomicNumber: true,
-      shopifyProductId: true,
-      shopifyVariantId: true,
     },
   });
 
-  // Build a map of shopifyVariantId → product for quick lookup
-  const variantMap = new Map();
+  const bySku = new Map();
   for (const p of products) {
-    if (p.shopifyVariantId) {
-      // Strip gid prefix if present
-      const numericId = String(p.shopifyVariantId).split("/").pop();
-      variantMap.set(numericId, p);
-    }
+    if (p.sku) bySku.set(String(p.sku), p);
   }
 
-  // For the FRD slice 1, we'll use the synced Product table as the source of truth
-  // rather than fetching live Shopify orders (which would require GraphQL pagination).
-  // A future enhancement could query Shopify GraphQL orders API for better accuracy.
-  
-  // Filter products to those matching the format track
   const suggestions = [];
-  for (const product of products) {
-    if (!product.sku || !product.elementSymbol) continue;
+  const seen = new Set();
+  for (const sku of purchasedSkus) {
+    const product = bySku.get(sku);
+    if (!product || !product.elementSymbol) continue;
 
     const productFormat = canonicalFormatFromSku(product.sku);
-    if (!productFormat) continue;
+    if (!matchesTrack(productFormat)) continue;
 
-    // Match format track (e.g. "10mm" matches "10mm_cube")
-    const trackNormalized = formatTrack.replace("mm", "mm_cube").replace("lucite", "lucite_cube");
-    if (productFormat !== trackNormalized && productFormat !== formatTrack) continue;
+    const key = `${product.elementSymbol}:${productFormat}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
 
-    // This is a candidate suggestion
     suggestions.push({
       elementSymbol: product.elementSymbol,
       elementName: product.elementName,
@@ -129,16 +224,11 @@ export async function seedFromOrderHistory(shopifyCustomerId, formatTrack) {
     });
   }
 
-  // Deduplicate by element+format (keep first occurrence)
-  const seen = new Set();
-  const unique = suggestions.filter(item => {
-    const key = `${item.elementSymbol}:${item.format}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-
-  return unique;
+  logger.info(
+    MODULE,
+    `Seeded ${suggestions.length} order-history suggestion(s) for customer ${numericCustomerId} (track ${formatTrack}).`
+  );
+  return suggestions;
 }
 
 /**
