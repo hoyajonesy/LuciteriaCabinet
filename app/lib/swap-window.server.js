@@ -909,6 +909,143 @@ export async function handleCancelledHeldShipments({ subscription, settings = nu
 }
 
 // ─────────────────────────────────────────────────────────────
+// Staff overrides (FR-22 / FR-23) — support-case controls
+// ─────────────────────────────────────────────────────────────
+//
+// Every override goes through the same single atomic claim as customer/system
+// finalization (FR-15) and is attributed to the acting staff member via
+// ShipmentSwapEvent.staffId. NOTE: the in-app admin panel authenticates staff as
+// a User with isStaff=true (see admin.server.js requireAdmin), so staffId here
+// carries that acting staff User.id — the identity actually performing the
+// action on this surface. The column is an unconstrained String, so this is safe.
+
+/**
+ * Force an early finalize of a held shipment (FR-23), placing the order for the
+ * currently-assigned item now instead of waiting for the window to close.
+ */
+export async function staffForceFinalize({ shipmentId, staffId = null, note = null }) {
+  const shipment = await prisma.subscriptionShipment.findUnique({ where: { id: shipmentId } });
+  if (!shipment) throw new Error(`Shipment ${shipmentId} not found`);
+  if (shipment.status !== HELD_STATUS) {
+    return { ok: false, reason: "not_held", message: "This shipment is not in a swap window." };
+  }
+  const won = await claimFinalization(shipmentId);
+  if (!won) {
+    return { ok: false, reason: "already_decided", message: "This shipment has already been finalized." };
+  }
+  const fresh = await prisma.subscriptionShipment.findUnique({ where: { id: shipmentId } });
+  const result = await placeOrderForHeldShipment({ shipment: fresh });
+
+  await recordSwapEvent({
+    shipmentId,
+    action: SWAP_EVENT_ACTION.STAFF_OVERRIDE,
+    source: SWAP_EVENT_SOURCE.STAFF,
+    fromProductId: fresh.originalProductId || null,
+    toProductId: result.product?.id || null,
+    staffId,
+    note: note || (result.ok ? "Staff forced early finalize" : "Staff force-finalize — finalization failed (exception opened)"),
+  });
+
+  if (result.ok) {
+    try {
+      const wasSwap = fresh.swapDecision === SWAP_DECISION.SWAPPED;
+      await notifySwapOutcome({ shipment: fresh, kind: wasSwap ? "swapped" : "shipped", product: result.product });
+    } catch (e) {
+      logger.warn(MODULE, `staff force-finalize notification failed for ${shipmentId}: ${e.message}`);
+    }
+  }
+  return { ok: result.ok, finalized: result.ok, exception: result.exception, product: result.product };
+}
+
+/**
+ * Override the pick on a held shipment (FR-23) and finalize immediately. Unlike a
+ * customer swap this is NOT restricted to the eligible pool or the retail cap —
+ * it is a staff support tool — but it still re-validates inventory at
+ * finalization (placeOrderForHeldShipment / FR-7) and uses the atomic claim.
+ */
+export async function staffOverridePick({ shipmentId, newProductId, staffId = null, note = null }) {
+  if (!newProductId) throw new Error("newProductId is required");
+  const shipment = await prisma.subscriptionShipment.findUnique({ where: { id: shipmentId } });
+  if (!shipment) throw new Error(`Shipment ${shipmentId} not found`);
+  if (shipment.status !== HELD_STATUS) {
+    return { ok: false, reason: "not_held", message: "This shipment is not in a swap window." };
+  }
+  const target = await prisma.product.findUnique({ where: { id: newProductId } });
+  if (!target) return { ok: false, reason: "not_found", message: "That product was not found." };
+
+  const won = await claimFinalization(shipmentId);
+  if (!won) {
+    return { ok: false, reason: "already_decided", message: "This shipment has already been finalized." };
+  }
+
+  const currentItem = await prisma.shipmentItem.findFirst({ where: { shipmentId } });
+  const fromProductId = currentItem?.productId || shipment.originalProductId || null;
+
+  await prisma.shipmentItem.deleteMany({ where: { shipmentId } });
+  await prisma.shipmentItem.create({ data: { shipmentId, productId: target.id } });
+  await prisma.subscriptionShipment.update({
+    where: { id: shipmentId },
+    data: { swapDecision: SWAP_DECISION.SWAPPED, decidedAt: new Date(), retailPrice: target.retailPrice || target.priceUsd || 0 },
+  });
+
+  const fresh = await prisma.subscriptionShipment.findUnique({ where: { id: shipmentId } });
+  const result = await placeOrderForHeldShipment({ shipment: fresh });
+
+  await recordSwapEvent({
+    shipmentId,
+    action: SWAP_EVENT_ACTION.STAFF_OVERRIDE,
+    source: SWAP_EVENT_SOURCE.STAFF,
+    fromProductId,
+    toProductId: target.id,
+    staffId,
+    note: note || (result.ok ? `Staff overrode pick to ${target.title}` : "Staff pick-override — finalization failed (exception opened)"),
+  });
+
+  if (result.ok) {
+    try {
+      await notifySwapOutcome({ shipment: fresh, kind: "swapped", product: target });
+    } catch (e) {
+      logger.warn(MODULE, `staff override notification failed for ${shipmentId}: ${e.message}`);
+    }
+  }
+  return { ok: result.ok, finalized: result.ok, exception: result.exception, product: target };
+}
+
+/**
+ * Extend a held shipment's window (FR-23) by N days from its current expiry
+ * (or from now, if already past). Does not finalize; the shipment stays held.
+ */
+export async function staffExtendWindow({ shipmentId, additionalDays, staffId = null, note = null }) {
+  const days = Number(additionalDays);
+  if (!Number.isFinite(days) || days <= 0) throw new Error("additionalDays must be a positive number");
+  const shipment = await prisma.subscriptionShipment.findUnique({ where: { id: shipmentId } });
+  if (!shipment) throw new Error(`Shipment ${shipmentId} not found`);
+  if (shipment.status !== HELD_STATUS) {
+    return { ok: false, reason: "not_held", message: "This shipment is not in a swap window." };
+  }
+
+  const base = shipment.windowExpiresAt && new Date(shipment.windowExpiresAt) > new Date()
+    ? new Date(shipment.windowExpiresAt)
+    : new Date();
+  const windowExpiresAt = new Date(base.getTime() + days * 86400000);
+
+  await prisma.subscriptionShipment.update({
+    where: { id: shipmentId },
+    data: { windowExpiresAt, windowRemainingSeconds: null },
+  });
+
+  await recordSwapEvent({
+    shipmentId,
+    action: SWAP_EVENT_ACTION.STAFF_OVERRIDE,
+    source: SWAP_EVENT_SOURCE.STAFF,
+    staffId,
+    note: note || `Staff extended window by ${days} day(s) → ${windowExpiresAt.toISOString()}`,
+  });
+
+  return { ok: true, windowExpiresAt };
+}
+
+// ─────────────────────────────────────────────────────────────
 // Notifications (FR-19 window opened, FR-20 reminder, FR-21 outcome)
 // ─────────────────────────────────────────────────────────────
 
