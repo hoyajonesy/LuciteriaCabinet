@@ -912,7 +912,7 @@ export async function handleCancelledHeldShipments({ subscription, settings = nu
 // Notifications (FR-19 window opened, FR-20 reminder, FR-21 outcome)
 // ─────────────────────────────────────────────────────────────
 
-const SWAP_ACTION_LINK = "/app/cabinet/subscription";
+const SWAP_ACTION_LINK = "/app/cabinet/swap";
 
 /** Resolve the notifiable Cabinet user (id + email + name) for a shipment. */
 async function notifyTargetForShipment(shipment) {
