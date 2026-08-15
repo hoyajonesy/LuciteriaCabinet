@@ -28,6 +28,7 @@ import { logger } from "./error-handling.server.js";
 import { getFeatureFlag } from "./feature-flags.server.js";
 import { computeEligiblePool } from "./assignment-engine.server.js";
 import { grantSkipCredit, expireSkipCreditsOnCancellation } from "./credits.server.js";
+import { notify } from "./notifications-db.server.js";
 
 const MODULE = "swap-window";
 
@@ -221,6 +222,16 @@ export async function enterSwapWindow({ shipmentId, originalProductId, settings 
     userId,
     note: `Window opened for ${s.windowLengthDays} day(s); expires ${windowExpiresAt.toISOString()}`,
   });
+
+  // FR-19: tell the collector their pick is ready and the window is open.
+  try {
+    const product = originalProductId
+      ? await prisma.product.findUnique({ where: { id: originalProductId } })
+      : null;
+    await notifySwapWindowOpened({ shipment, product, deadline: windowExpiresAt });
+  } catch (e) {
+    logger.warn(MODULE, `window-opened notification failed for shipment ${shipmentId}: ${e.message}`);
+  }
 
   logger.info(MODULE, `Shipment ${shipmentId} entered held state (expires ${windowExpiresAt.toISOString()})`);
   return shipment;
@@ -478,6 +489,14 @@ export async function swapShipment({ shipmentId, newProductId, userId = null }) 
       note: result.ok ? "Swap finalized immediately" : "Swap recorded; finalization needs admin (item ineligible/draft failed)",
     });
 
+    if (result.ok) {
+      try {
+        await notifySwapOutcome({ shipment: fresh, kind: "swapped", product: target });
+      } catch (e) {
+        logger.warn(MODULE, `swap-outcome notification failed for shipment ${shipmentId}: ${e.message}`);
+      }
+    }
+
     return {
       ok: result.ok,
       finalized: result.ok,
@@ -598,6 +617,13 @@ export async function skipShipment({ shipmentId, userId = null }) {
       : "Skip; credit not granted",
   });
 
+  try {
+    const creditAmount = credit && !credit.wasAlreadyGranted ? credit.transaction?.amount ?? null : null;
+    await notifySwapOutcome({ shipment, kind: "skipped", product: null, creditAmount });
+  } catch (e) {
+    logger.warn(MODULE, `skip-outcome notification failed for shipment ${shipmentId}: ${e.message}`);
+  }
+
   return { ok: true, finalized: true, credit, reason: null };
 }
 
@@ -620,7 +646,34 @@ export async function skipShipment({ shipmentId, userId = null }) {
  * @param {Date} [params.now]
  * @returns {Promise<{ scanned: number, finalized: number, exceptions: number, skippedRace: number, errors: number }>}
  */
-export async function runSwapWindowCloseJob({ now = new Date() } = {}) {
+export async function runSwapWindowCloseJob({ now = new Date(), reminderThresholdHours = 24 } = {}) {
+  // FR-20: pre-deadline reminders. Any still-undecided held shipment whose
+  // deadline falls within the reminder window (but hasn't elapsed yet) gets a
+  // single reminder. notify() dedupes on the per-shipment key, so re-running the
+  // job never sends a second reminder — no schema change or "sent" flag needed.
+  let remindersSent = 0;
+  try {
+    const reminderCutoff = new Date(now.getTime() + reminderThresholdHours * 3600000);
+    const approaching = await prisma.subscriptionShipment.findMany({
+      where: {
+        status: HELD_STATUS,
+        finalizationClaimed: false,
+        swapDecision: SWAP_DECISION.NONE,
+        windowExpiresAt: { not: null, gt: now, lte: reminderCutoff },
+      },
+    });
+    for (const shipment of approaching) {
+      try {
+        const res = await notifySwapReminder({ shipment, deadline: shipment.windowExpiresAt });
+        if (res) remindersSent++;
+      } catch (e) {
+        logger.warn(MODULE, `swap reminder failed for shipment ${shipment.id}: ${e.message}`);
+      }
+    }
+  } catch (e) {
+    logger.warn(MODULE, `swap reminder pass failed: ${e.message}`);
+  }
+
   const due = await prisma.subscriptionShipment.findMany({
     where: {
       status: HELD_STATUS,
@@ -629,7 +682,7 @@ export async function runSwapWindowCloseJob({ now = new Date() } = {}) {
     },
   });
 
-  const summary = { scanned: due.length, finalized: 0, exceptions: 0, skippedRace: 0, errors: 0 };
+  const summary = { scanned: due.length, finalized: 0, exceptions: 0, skippedRace: 0, errors: 0, remindersSent };
 
   for (const shipment of due) {
     try {
@@ -660,7 +713,7 @@ export async function runSwapWindowCloseJob({ now = new Date() } = {}) {
 
       if (result.ok) {
         summary.finalized++;
-        await notifyOutcome({ shipment: fresh, kind: wasSwap ? "swapped" : "shipped", product: result.product });
+        await notifySwapOutcome({ shipment: fresh, kind: wasSwap ? "swapped" : "shipped", product: result.product });
       } else {
         summary.exceptions++;
       }
@@ -855,24 +908,110 @@ export async function handleCancelledHeldShipments({ subscription, settings = nu
   return { held: held.length, credited, refunded: !!s.skipCreditRefundOnCancellation, expiryStamped };
 }
 
-/**
- * Best-effort customer notification of a shipment's final outcome (FR-21).
- * Kept lightweight here; richer templating is layered on in the notifications
- * slice. Never throws — notification failure must not block finalization.
- */
-async function notifyOutcome({ shipment, kind, product }) {
+// ─────────────────────────────────────────────────────────────
+// Notifications (FR-19 window opened, FR-20 reminder, FR-21 outcome)
+// ─────────────────────────────────────────────────────────────
+
+const SWAP_ACTION_LINK = "/app/cabinet/subscription";
+
+/** Resolve the notifiable Cabinet user (id + email + name) for a shipment. */
+async function notifyTargetForShipment(shipment) {
   try {
-    const { sendCustomerNotification } = await import("../integrations/seal/seal-webhooks.server.js").catch(() => ({}));
-    if (typeof sendCustomerNotification !== "function") return;
-    const title =
-      kind === "swapped" ? "Your swapped pick is on its way" : "Your selection is on its way";
-    const body = product?.title
-      ? `${product.title} has been finalized for your subscription.`
-      : "Your subscription selection has been finalized.";
-    await sendCustomerNotification(shipment.customerId, { title, body, icon: "📦" });
-  } catch {
-    // ignore — notifications are non-critical here
+    const customer = await prisma.customer.findUnique({ where: { id: shipment.customerId } });
+    if (!customer) return null;
+    const { resolveUserIdForCustomer } = await sm();
+    const userId = await resolveUserIdForCustomer(customer);
+    if (!userId) return null;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, email: true, firstName: true, name: true },
+    });
+    if (!user) return null;
+    return { userId: user.id, email: user.email, name: user.firstName || user.name || "Collector" };
+  } catch (e) {
+    logger.warn(MODULE, `notify target resolution failed for shipment ${shipment.id}: ${e.message}`);
+    return null;
   }
+}
+
+function fmtDeadline(d) {
+  if (!d) return "soon";
+  try {
+    return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  } catch {
+    return "soon";
+  }
+}
+
+/** FR-19: window opened — what was picked, the deadline, and a link to act. */
+export async function notifySwapWindowOpened({ shipment, product, deadline }) {
+  const t = await notifyTargetForShipment(shipment);
+  if (!t) return null;
+  const pick = product?.title || "your next item";
+  const by = fmtDeadline(deadline);
+  return notify(t.userId, {
+    category: "SYSTEM",
+    title: "Your next pick is ready — swap or skip by " + by,
+    body: `We've selected ${pick} for your subscription. You can keep it, swap it for another eligible item, or skip this cycle for store credit — you have until ${by} to decide, after which ${pick} ships automatically.`,
+    linkUrl: SWAP_ACTION_LINK,
+    icon: "🎁",
+    dedupeKey: `swap_window_opened:${shipment.id}`,
+    email: t.email ? { to: t.email, subject: "Your next Luciteria pick — swap or skip by " + by } : null,
+  });
+}
+
+/** FR-20: pre-deadline reminder if no decision made yet (deduped, at most once). */
+export async function notifySwapReminder({ shipment, deadline }) {
+  const t = await notifyTargetForShipment(shipment);
+  if (!t) return null;
+  const by = fmtDeadline(deadline);
+  return notify(t.userId, {
+    category: "SYSTEM",
+    title: "Reminder: your swap/skip window closes " + by,
+    body: `You haven't decided on this cycle's pick yet. Swap it, skip it for credit, or do nothing to have it ship as selected. Window closes ${by}.`,
+    linkUrl: SWAP_ACTION_LINK,
+    icon: "⏰",
+    dedupeKey: `swap_window_reminder:${shipment.id}`,
+    email: t.email ? { to: t.email, subject: "Reminder: your Luciteria swap window closes " + by } : null,
+  });
+}
+
+/**
+ * FR-21: final outcome — shipped as assigned, shipped as swapped, or skipped.
+ * @param {"shipped"|"swapped"|"skipped"} kind
+ */
+export async function notifySwapOutcome({ shipment, kind, product, creditAmount = null }) {
+  const t = await notifyTargetForShipment(shipment);
+  if (!t) return null;
+  let title, body, icon;
+  if (kind === "skipped") {
+    icon = "💳";
+    title = "Cycle skipped — store credit added";
+    body = creditAmount
+      ? `You skipped this cycle. $${Number(creditAmount).toFixed(2)} in store credit has been added to your account.`
+      : "You skipped this cycle and store credit has been added to your account.";
+  } else if (kind === "swapped") {
+    icon = "🔄";
+    title = "Your swapped pick is on its way";
+    body = product?.title
+      ? `${product.title} has been finalized and will ship for this cycle.`
+      : "Your swapped selection has been finalized and will ship for this cycle.";
+  } else {
+    icon = "📦";
+    title = "Your selection is on its way";
+    body = product?.title
+      ? `${product.title} has been finalized and will ship for this cycle.`
+      : "Your subscription selection has been finalized and will ship for this cycle.";
+  }
+  return notify(t.userId, {
+    category: "SYSTEM",
+    title,
+    body,
+    linkUrl: SWAP_ACTION_LINK,
+    icon,
+    dedupeKey: `swap_window_outcome:${shipment.id}`,
+    email: t.email ? { to: t.email, subject: title } : null,
+  });
 }
 
 /**
