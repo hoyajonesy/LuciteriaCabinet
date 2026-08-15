@@ -65,6 +65,7 @@ export async function seedFeatureFlags() {
     { flagName: "phase3_enabled", isEnabled: false, description: "Dynamic curation system (always false)" },
     { flagName: "feature_collection_passport", isEnabled: true, description: "Collection Passport public collector profiles" },
     { flagName: "feature_subscription_onboarding_gate", isEnabled: false, description: "Subscription owned-items onboarding flow + assignment-engine gating" },
+    { flagName: "feature_swap_skip_window", isEnabled: false, description: "Subscription Swap & Skip Window — held state, swap/skip, deferred finalization (default OFF; flag-off finalizes immediately as today)" },
   ];
 
   for (const flag of flags) {
