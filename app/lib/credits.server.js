@@ -289,3 +289,133 @@ export async function grantSkipCredit(userId, subscriptionContractId, billingCyc
 
   return { balance: updatedUser.storeCreditBalance, transaction, wasAlreadyGranted: false };
 }
+
+
+
+/**
+ * Stamp a post-cancellation expiry on a contract's banked skip credits
+ * (Swap & Skip Window, FR-18 + policy: usable for N days post-cancellation,
+ * then expire; no refund).
+ *
+ * Called when a subscription is cancelled. Sets `expiresAt = now + days` on
+ * every still-usable skip credit for the contract. Credits already expired
+ * (expiredAt set) are left alone. Existing earlier expiries are not pushed out;
+ * only credits without an expiry, or with a LATER expiry than the cancellation
+ * deadline, are tightened to the cancellation deadline so cancellation never
+ * extends a credit's life.
+ *
+ * @param {string} subscriptionContractId
+ * @param {number} days - skipCreditPostCancellationDays (e.g. 90)
+ * @param {Object} [opts]
+ * @param {Date} [opts.now]
+ * @returns {Promise<{ stamped: number, deadline: Date }>}
+ */
+export async function expireSkipCreditsOnCancellation(subscriptionContractId, days, opts = {}) {
+  const now = opts.now || new Date();
+  if (!subscriptionContractId) throw new Error("subscriptionContractId is required");
+  const deadline = new Date(now.getTime() + (Number(days) || 0) * 86400000);
+
+  const credits = await prisma.creditTransaction.findMany({
+    where: {
+      subscriptionContractId,
+      type: "SUBSCRIPTION_SKIP_CREDIT",
+      expiredAt: null,
+      amount: { gt: 0 },
+    },
+    select: { id: true, expiresAt: true },
+  });
+
+  let stamped = 0;
+  for (const c of credits) {
+    // Never extend a credit's life: only set/tighten the expiry.
+    if (c.expiresAt && c.expiresAt.getTime() <= deadline.getTime()) continue;
+    await prisma.creditTransaction.update({
+      where: { id: c.id },
+      data: { expiresAt: deadline },
+    });
+    stamped++;
+  }
+
+  return { stamped, deadline };
+}
+
+/**
+ * Credit-expiry sweep (Swap & Skip Window). Claws back the remaining value of
+ * skip credits whose `expiresAt` has passed and stamps `expiredAt` so the same
+ * credit is never swept twice (idempotent).
+ *
+ * The store credit balance is a single pooled figure (no per-lot tracking), so
+ * an expiring credit's claw-back is capped at the user's CURRENT balance — the
+ * balance can never go negative, and value the subscriber already spent is not
+ * double-counted.
+ *
+ * Concurrency-safe: expiry is claimed with a conditional updateMany on
+ * `expiredAt: null` (single-winner), mirroring the atomic-claim pattern used
+ * elsewhere in this feature.
+ *
+ * @param {Object} [params]
+ * @param {Date} [params.now]
+ * @returns {Promise<{ scanned: number, expired: number, clawedBack: number, errors: number }>}
+ */
+export async function runSkipCreditExpirySweep({ now = new Date() } = {}) {
+  const due = await prisma.creditTransaction.findMany({
+    where: {
+      type: "SUBSCRIPTION_SKIP_CREDIT",
+      expiredAt: null,
+      amount: { gt: 0 },
+      expiresAt: { not: null, lte: now },
+    },
+  });
+
+  const summary = { scanned: due.length, expired: 0, clawedBack: 0, errors: 0 };
+
+  for (const credit of due) {
+    try {
+      // Atomically claim the expiry (single-winner).
+      const claim = await prisma.creditTransaction.updateMany({
+        where: { id: credit.id, expiredAt: null },
+        data: { expiredAt: now },
+      });
+      if (claim.count !== 1) continue; // someone else swept it
+
+      const user = await prisma.user.findUnique({
+        where: { id: credit.userId },
+        select: { storeCreditBalance: true },
+      });
+      if (!user) {
+        summary.errors++;
+        continue;
+      }
+
+      const clawBack = Math.min(credit.amount, Math.max(0, user.storeCreditBalance));
+      if (clawBack > 0) {
+        const balanceBefore = user.storeCreditBalance;
+        const balanceAfter = balanceBefore - clawBack;
+        await prisma.$transaction([
+          prisma.user.update({
+            where: { id: credit.userId },
+            data: { storeCreditBalance: balanceAfter },
+          }),
+          prisma.creditTransaction.create({
+            data: {
+              userId: credit.userId,
+              amount: -clawBack,
+              type: "SUBSCRIPTION_SKIP_CREDIT_EXPIRED",
+              description: `Skip credit expired — $${clawBack.toFixed(2)} clawed back (cycle ${credit.billingCycle || "n/a"})`,
+              balanceBefore,
+              balanceAfter,
+              subscriptionContractId: null,
+              billingCycle: null,
+            },
+          }),
+        ]);
+        summary.clawedBack += clawBack;
+      }
+      summary.expired++;
+    } catch (e) {
+      summary.errors++;
+    }
+  }
+
+  return summary;
+}

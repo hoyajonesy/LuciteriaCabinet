@@ -27,7 +27,7 @@ import { prisma } from "./db.server.js";
 import { logger } from "./error-handling.server.js";
 import { getFeatureFlag } from "./feature-flags.server.js";
 import { computeEligiblePool } from "./assignment-engine.server.js";
-import { grantSkipCredit } from "./credits.server.js";
+import { grantSkipCredit, expireSkipCreditsOnCancellation } from "./credits.server.js";
 
 const MODULE = "swap-window";
 
@@ -599,6 +599,280 @@ export async function skipShipment({ shipmentId, userId = null }) {
   });
 
   return { ok: true, finalized: true, credit, reason: null };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Window-close job (FR-13/FR-21) — admin/cron-triggered, idempotent
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Close expired swap windows: for every held shipment whose window has elapsed
+ * and which has not yet been finalized, atomically claim it and place the order
+ * for its currently-assigned item (the original pick, or a non-immediate swap
+ * recorded earlier). Skipped shipments never match (they are already finalized).
+ *
+ * Idempotent and race-safe: finalization is claimed with the single-winner
+ * `claimFinalization` guard, so re-running the job (or a concurrent customer
+ * action) can never double-finalize a shipment. Per the FRD acceptance criteria,
+ * this is admin/cron-triggered, not automatic.
+ *
+ * @param {Object} [params]
+ * @param {Date} [params.now]
+ * @returns {Promise<{ scanned: number, finalized: number, exceptions: number, skippedRace: number, errors: number }>}
+ */
+export async function runSwapWindowCloseJob({ now = new Date() } = {}) {
+  const due = await prisma.subscriptionShipment.findMany({
+    where: {
+      status: HELD_STATUS,
+      finalizationClaimed: false,
+      windowExpiresAt: { not: null, lte: now },
+    },
+  });
+
+  const summary = { scanned: due.length, finalized: 0, exceptions: 0, skippedRace: 0, errors: 0 };
+
+  for (const shipment of due) {
+    try {
+      // Atomic terminal claim — the finalizationClaimed guard alone resolves any
+      // race with a concurrent customer swap/skip regardless of decision value.
+      const won = await claimFinalization(shipment.id);
+      if (!won) {
+        summary.skippedRace++;
+        continue;
+      }
+
+      const fresh = await prisma.subscriptionShipment.findUnique({ where: { id: shipment.id } });
+      const result = await placeOrderForHeldShipment({ shipment: fresh });
+
+      const wasSwap = fresh.swapDecision === SWAP_DECISION.SWAPPED;
+      await recordSwapEvent({
+        shipmentId: shipment.id,
+        action: SWAP_EVENT_ACTION.AUTO_FINALIZE,
+        source: SWAP_EVENT_SOURCE.SYSTEM,
+        fromProductId: fresh.originalProductId || null,
+        toProductId: result.product?.id || null,
+        note: result.ok
+          ? wasSwap
+            ? "Window closed — shipped the customer's swapped selection"
+            : "Window closed — shipped the original assigned item"
+          : "Window closed — finalization failed (item ineligible/draft failed); admin exception opened",
+      });
+
+      if (result.ok) {
+        summary.finalized++;
+        await notifyOutcome({ shipment: fresh, kind: wasSwap ? "swapped" : "shipped", product: result.product });
+      } else {
+        summary.exceptions++;
+      }
+    } catch (e) {
+      summary.errors++;
+      logger.error(MODULE, `Window-close finalize failed for shipment ${shipment.id}: ${e.message}`);
+    }
+  }
+
+  logger.info(MODULE, "Swap window-close job complete", summary);
+  return summary;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Pause / resume (FR-17 / FR-32) — non-destructive held handling
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Pause any held shipments for a subscription (FR-17/FR-32). The remaining
+ * window time is captured onto `windowRemainingSeconds` and the shipment is
+ * LEFT in held_for_swap (never swept to "skipped"), so the pause handler neither
+ * ignores nor destroys it. The countdown resumes on reactivation.
+ *
+ * @param {string} subscriptionId
+ * @param {Object} [opts]
+ * @param {Date} [opts.now]
+ * @returns {Promise<{ paused: number }>}
+ */
+export async function pauseHeldShipments(subscriptionId, opts = {}) {
+  const now = opts.now || new Date();
+  const held = await prisma.subscriptionShipment.findMany({
+    where: { subscriptionId, status: HELD_STATUS, finalizationClaimed: false },
+  });
+
+  let paused = 0;
+  for (const s of held) {
+    // If already captured (double pause), leave the earlier capture intact.
+    if (s.windowRemainingSeconds != null) continue;
+    const remainingMs = s.windowExpiresAt ? s.windowExpiresAt.getTime() - now.getTime() : 0;
+    const windowRemainingSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
+    await prisma.subscriptionShipment.update({
+      where: { id: s.id },
+      data: { windowRemainingSeconds },
+    });
+    await recordSwapEvent({
+      shipmentId: s.id,
+      action: SWAP_EVENT_ACTION.PAUSED,
+      source: SWAP_EVENT_SOURCE.SYSTEM,
+      note: `Subscription paused — ${windowRemainingSeconds}s of window preserved`,
+    });
+    paused++;
+  }
+  if (paused) logger.info(MODULE, `Paused ${paused} held shipment(s) for subscription ${subscriptionId}`);
+  return { paused };
+}
+
+/**
+ * Resume held shipments for a subscription (FR-17). Recomputes
+ * `windowExpiresAt = now + windowRemainingSeconds` and clears the capture,
+ * mirroring the onboarding grace-window resume precedent.
+ *
+ * @param {string} subscriptionId
+ * @param {Object} [opts]
+ * @param {Date} [opts.now]
+ * @returns {Promise<{ resumed: number }>}
+ */
+export async function resumeHeldShipments(subscriptionId, opts = {}) {
+  const now = opts.now || new Date();
+  const held = await prisma.subscriptionShipment.findMany({
+    where: { subscriptionId, status: HELD_STATUS, windowRemainingSeconds: { not: null } },
+  });
+
+  let resumed = 0;
+  for (const s of held) {
+    const newExpiry = new Date(now.getTime() + s.windowRemainingSeconds * 1000);
+    await prisma.subscriptionShipment.update({
+      where: { id: s.id },
+      data: { windowExpiresAt: newExpiry, windowRemainingSeconds: null },
+    });
+    await recordSwapEvent({
+      shipmentId: s.id,
+      action: SWAP_EVENT_ACTION.RESUMED,
+      source: SWAP_EVENT_SOURCE.SYSTEM,
+      note: `Subscription resumed — window now expires ${newExpiry.toISOString()}`,
+    });
+    resumed++;
+  }
+  if (resumed) logger.info(MODULE, `Resumed ${resumed} held shipment(s) for subscription ${subscriptionId}`);
+  return { resumed };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Cancellation (FR-18) — never auto-finalize a held shipment
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Handle held shipments when a subscription is cancelled (FR-18). A held
+ * shipment MUST NOT auto-finalize into an order. Because the subscriber has
+ * already been billed for the cycle and `skipCreditRefundOnCancellation` is off
+ * (no cash refund), the cycle's value is banked as store credit — exactly like a
+ * skip — and every outstanding skip credit for the contract is then given the
+ * post-cancellation expiry (usable for `skipCreditPostCancellationDays`, then it
+ * expires).
+ *
+ * @param {Object} params
+ * @param {Object} params.subscription
+ * @param {Object} [params.settings]
+ * @param {Date} [params.now]
+ * @returns {Promise<{ held: number, credited: number, refunded: boolean, expiryStamped: number }>}
+ */
+export async function handleCancelledHeldShipments({ subscription, settings = null, now = new Date() }) {
+  const s = settings || (await getSwapWindowSettings());
+  const contractId = subscription?.appstleContractId || subscription?.shopifyContractId || null;
+
+  const held = await prisma.subscriptionShipment.findMany({
+    where: { subscriptionId: subscription.id, status: HELD_STATUS, finalizationClaimed: false },
+  });
+
+  const { resolveUserIdForCustomer } = await sm();
+  const customer = await prisma.customer.findUnique({ where: { id: subscription.customerId } });
+  const resolvedUserId = customer ? await resolveUserIdForCustomer(customer) : null;
+
+  let credited = 0;
+  for (const shipment of held) {
+    // Atomic claim so a racing window-close/customer action cannot also act.
+    const won = await claimFinalization(shipment.id);
+    if (!won) continue;
+
+    const currentItem = await prisma.shipmentItem.findFirst({ where: { shipmentId: shipment.id } });
+    const fromProductId = currentItem?.productId || shipment.originalProductId || null;
+
+    await prisma.subscriptionShipment.update({
+      where: { id: shipment.id },
+      data: { status: "skipped", swapDecision: SWAP_DECISION.SKIPPED, decidedAt: now },
+    });
+
+    // No cash refund (skipCreditRefundOnCancellation off) → bank as store credit.
+    let credit = null;
+    if (!s.skipCreditRefundOnCancellation && resolvedUserId && contractId) {
+      try {
+        const billingCycle = billingCycleFor(subscription, shipment);
+        const amount = shipment.assignedPrice ?? subscription?.priceUsd ?? 0;
+        if (amount > 0) {
+          credit = await grantSkipCredit(
+            resolvedUserId,
+            contractId,
+            billingCycle,
+            amount,
+            `Subscription cancelled mid-window — banked $${amount.toFixed(2)} store credit for cycle ${billingCycle}`,
+            {}
+          );
+          if (!credit.wasAlreadyGranted) credited++;
+        }
+      } catch (e) {
+        logger.error(MODULE, `Cancel credit grant failed for shipment ${shipment.id}: ${e.message}`);
+      }
+    }
+
+    await recordSwapEvent({
+      shipmentId: shipment.id,
+      action: SWAP_EVENT_ACTION.SKIP,
+      source: SWAP_EVENT_SOURCE.SYSTEM,
+      fromProductId,
+      toProductId: null,
+      note: s.skipCreditRefundOnCancellation
+        ? "Subscription cancelled mid-window — not finalized (refund policy on)"
+        : credit
+          ? credit.wasAlreadyGranted
+            ? `Subscription cancelled mid-window — credit already existed (type ${credit.collidedType})`
+            : "Subscription cancelled mid-window — banked cycle value as store credit"
+          : "Subscription cancelled mid-window — not finalized",
+    });
+  }
+
+  // Stamp the post-cancellation expiry on the contract's banked skip credits.
+  let expiryStamped = 0;
+  if (contractId && !s.skipCreditRefundOnCancellation && s.skipCreditPostCancellationDays != null) {
+    try {
+      const res = await expireSkipCreditsOnCancellation(contractId, s.skipCreditPostCancellationDays, { now });
+      expiryStamped = res.stamped;
+    } catch (e) {
+      logger.error(MODULE, `Post-cancellation credit expiry stamp failed for ${contractId}: ${e.message}`);
+    }
+  }
+
+  if (held.length) {
+    logger.info(MODULE, `Cancel: handled ${held.length} held shipment(s) for subscription ${subscription.id}`, {
+      credited,
+      expiryStamped,
+    });
+  }
+  return { held: held.length, credited, refunded: !!s.skipCreditRefundOnCancellation, expiryStamped };
+}
+
+/**
+ * Best-effort customer notification of a shipment's final outcome (FR-21).
+ * Kept lightweight here; richer templating is layered on in the notifications
+ * slice. Never throws — notification failure must not block finalization.
+ */
+async function notifyOutcome({ shipment, kind, product }) {
+  try {
+    const { sendCustomerNotification } = await import("../integrations/seal/seal-webhooks.server.js").catch(() => ({}));
+    if (typeof sendCustomerNotification !== "function") return;
+    const title =
+      kind === "swapped" ? "Your swapped pick is on its way" : "Your selection is on its way";
+    const body = product?.title
+      ? `${product.title} has been finalized for your subscription.`
+      : "Your subscription selection has been finalized.";
+    await sendCustomerNotification(shipment.customerId, { title, body, icon: "📦" });
+  } catch {
+    // ignore — notifications are non-critical here
+  }
 }
 
 /**

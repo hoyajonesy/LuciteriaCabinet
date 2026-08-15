@@ -30,6 +30,12 @@ import {
   claimFirstAssignment,
   GATE_MODE,
 } from "../../lib/subscription-onboarding.server.js";
+import {
+  SWAP_WINDOW_FLAG,
+  pauseHeldShipments,
+  resumeHeldShipments,
+  handleCancelledHeldShipments,
+} from "../../lib/swap-window.server.js";
 
 const MODULE = "seal-webhooks";
 
@@ -240,6 +246,23 @@ export async function handleSealCancelled(payload) {
     data: { status: "cancelled", cancelledAt: now },
   });
 
+  // Swap & Skip Window (FR-18/FR-32): a shipment in held_for_swap must NOT
+  // auto-finalize and must NOT be silently swept to "skipped" by the blanket
+  // updateMany below (its status matches neither of that filter's values, but we
+  // handle it explicitly and non-destructively first). Held cycles are banked as
+  // store credit (no refund) and the contract's skip credits get their
+  // post-cancellation expiry. Runs before the sweep so the credit path executes.
+  try {
+    if (await getFeatureFlag(SWAP_WINDOW_FLAG)) {
+      const res = await handleCancelledHeldShipments({ subscription, now });
+      if (res.held) {
+        logger.info(MODULE, `cancel: held-window handling`, res);
+      }
+    }
+  } catch (e) {
+    logger.error(MODULE, `cancel: held-window handling failed: ${e.message}`);
+  }
+
   // Cancel any pending/scheduled shipments (do NOT touch shipped/delivered).
   await prisma.subscriptionShipment.updateMany({
     where: {
@@ -270,10 +293,24 @@ export async function handleSealPaused(payload) {
   const subscription = await findSubscription(payload);
   if (!subscription) return { action: "pause_skipped", reason: "subscription_not_found" };
 
+  const pausedAt = new Date();
   await prisma.subscription.update({
     where: { id: subscription.id },
-    data: { status: "paused", pausedAt: new Date() },
+    data: { status: "paused", pausedAt },
   });
+
+  // Swap & Skip Window (FR-17/FR-32): held_for_swap shipments must be preserved
+  // non-destructively — their remaining window time is captured and the shipment
+  // is left held (NOT swept to "skipped"). Runs before the blanket updateMany;
+  // held_for_swap is not in that filter, so this is the only handling it gets.
+  try {
+    if (await getFeatureFlag(SWAP_WINDOW_FLAG)) {
+      const res = await pauseHeldShipments(subscription.id, { now: pausedAt });
+      if (res.paused) logger.info(MODULE, `pause: preserved ${res.paused} held window(s)`);
+    }
+  } catch (e) {
+    logger.error(MODULE, `pause: held-window handling failed: ${e.message}`);
+  }
 
   await prisma.subscriptionShipment.updateMany({
     where: { subscriptionId: subscription.id, status: { in: ["scheduled", "assigned"] } },
@@ -356,6 +393,18 @@ export async function handleSealActivated(payload) {
       
       logger.info(MODULE, `Restored grace window: ${onboarding.graceRemainingSeconds}s → new expiry ${newGraceExpiresAt.toISOString()} for onboarding ${onboarding.id}`);
     }
+  }
+
+  // Swap & Skip Window (FR-17): restore any preserved held windows before we
+  // touch preview/assignment, recomputing each window's expiry from the captured
+  // remaining time.
+  try {
+    if (await getFeatureFlag(SWAP_WINDOW_FLAG)) {
+      const res = await resumeHeldShipments(subscription.id, { now: new Date() });
+      if (res.resumed) logger.info(MODULE, `resume: restored ${res.resumed} held window(s)`);
+    }
+  } catch (e) {
+    logger.error(MODULE, `resume: held-window handling failed: ${e.message}`);
   }
 
   await updateUserSubscriptionStatus(subscription.customerId, "ACTIVE", true);

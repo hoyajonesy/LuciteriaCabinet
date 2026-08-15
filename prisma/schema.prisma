@@ -575,6 +575,11 @@ model CreditTransaction {
   // cancellation (skipCreditPostCancellationDays). null = no expiry.
   expiresAt DateTime?
 
+  // Set by the credit-expiry sweep once this credit has been expired (its
+  // remaining value clawed back). Presence makes the sweep idempotent — an
+  // already-expired credit is never swept twice.
+  expiredAt DateTime?
+
   createdAt DateTime @default(now())
 
   @@unique([subscriptionContractId, billingCycle], name: "subscription_cycle_credit")
