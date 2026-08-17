@@ -4,8 +4,17 @@
  * Shows a specific user's collection, milestones, goals, and activity.
  */
 import { json, redirect } from "@remix-run/node";
-import { useLoaderData, Link, Form, useActionData } from "@remix-run/react";
-import { getUserCollectionDetail, requireAdmin } from "../lib/admin.server.js";
+import { useState } from "react";
+import { useLoaderData, Link, Form, useActionData, useNavigation } from "@remix-run/react";
+import {
+  getUserCollectionDetail,
+  requireAdmin,
+  freezeUser,
+  unfreezeUser,
+  deactivateUsers,
+  restoreUsers,
+  hardDeleteUsers,
+} from "../lib/admin.server.js";
 import { prisma } from "../lib/db.server.js";
 import { unpublishPassport } from "../lib/passport.server.js";
 import { markOnboardingCompleteByAdmin } from "../lib/subscription-onboarding.server.js";
@@ -88,6 +97,29 @@ export const action = async ({ request, params }) => {
     return json({ ok: true, message: "Passport unpublished." });
   }
 
+  // ─── Account lifecycle ───
+  if (intent === "freeze") {
+    await freezeUser(params.userId, form.get("reason"), admin.email);
+    return json({ ok: true, message: "Account frozen." });
+  }
+  if (intent === "unfreeze") {
+    await unfreezeUser(params.userId, admin.email);
+    return json({ ok: true, message: "Account unfrozen." });
+  }
+  if (intent === "deactivate") {
+    await deactivateUsers([params.userId]);
+    return json({ ok: true, message: "Account deactivated." });
+  }
+  if (intent === "restore") {
+    await restoreUsers([params.userId]);
+    return json({ ok: true, message: "Account restored." });
+  }
+  if (intent === "hard-delete") {
+    await hardDeleteUsers([params.userId]);
+    // Record is gone — return to the list.
+    return redirect("/app/admin/users");
+  }
+
   if (intent === "mark-onboarding-complete") {
     const onboardingId = form.get("onboardingId");
     if (!onboardingId) {
@@ -116,6 +148,10 @@ export const action = async ({ request, params }) => {
 export default function AdminUserDetail() {
   const { user, stats, collectionStates, items, milestones, goals, recentActivity, elements, passport, subscriptionOnboardings } = useLoaderData();
   const actionData = useActionData();
+  const navigation = useNavigation();
+  const submitting = navigation.state === "submitting";
+  const [showFreeze, setShowFreeze] = useState(false);
+  const displayName = `${user.firstName} ${user.lastName}`.trim() || user.email;
 
   return (
     <div>
@@ -143,6 +179,83 @@ export default function AdminUserDetail() {
               </span>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* ─── Account status / lifecycle ─── */}
+      <div style={styles.card}>
+        <div style={styles.cardHeader}>
+          <h3 style={styles.cardTitle}>🔐 Account Status</h3>
+        </div>
+        <div style={styles.cardBody}>
+          {actionData?.message && <div style={styles.noticeOk}>{actionData.message}</div>}
+          {actionData?.error && <div style={styles.noticeErr}>{actionData.error}</div>}
+          <div style={styles.statusRow}>
+            <div style={{ flex: 1 }}>
+              {user.status === 'frozen' ? (
+                <>
+                  <span style={{ ...styles.acctBadge, background: '#e0f2fe', color: '#0369a1' }}>❄️ Frozen</span>
+                  {user.freezeReason && (
+                    <div style={styles.freezeReasonText}>Reason: {user.freezeReason}</div>
+                  )}
+                </>
+              ) : user.status === 'deleted' ? (
+                <span style={{ ...styles.acctBadge, background: '#fee2e2', color: '#dc2626' }}>🚫 Deactivated</span>
+              ) : (
+                <span style={{ ...styles.acctBadge, background: '#dcfce7', color: '#059669' }}>● Active</span>
+              )}
+            </div>
+            <div style={styles.statusActions}>
+              {user.status === 'frozen' ? (
+                <Form method="post" style={{ display: 'inline' }}>
+                  <input type="hidden" name="intent" value="unfreeze" />
+                  <button type="submit" style={styles.unfreezeBtn} disabled={submitting}>Unfreeze</button>
+                </Form>
+              ) : user.status !== 'deleted' ? (
+                <button type="button" style={styles.freezeBtn} disabled={submitting} onClick={() => setShowFreeze(v => !v)}>
+                  Freeze
+                </button>
+              ) : null}
+              {user.status === 'deleted' ? (
+                <Form method="post" style={{ display: 'inline' }}>
+                  <input type="hidden" name="intent" value="restore" />
+                  <button type="submit" style={styles.restoreBtn} disabled={submitting}>Restore</button>
+                </Form>
+              ) : (
+                <Form method="post" style={{ display: 'inline' }} onSubmit={(e) => {
+                  if (!confirm(`Deactivate ${displayName}? Their account is soft-deleted and can be restored later.`)) e.preventDefault();
+                }}>
+                  <input type="hidden" name="intent" value="deactivate" />
+                  <button type="submit" style={styles.deactivateBtn} disabled={submitting}>Deactivate</button>
+                </Form>
+              )}
+              <Form method="post" style={{ display: 'inline' }} onSubmit={(e) => {
+                if (!confirm(`PERMANENTLY delete ${displayName} and ALL associated data? This cannot be undone.`)) e.preventDefault();
+              }}>
+                <input type="hidden" name="intent" value="hard-delete" />
+                <button type="submit" style={styles.hardDeleteBtn} disabled={submitting}>🗑 Delete permanently</button>
+              </Form>
+            </div>
+          </div>
+          {showFreeze && user.status !== 'frozen' && user.status !== 'deleted' && (
+            <Form method="post" style={styles.freezeForm}>
+              <input type="hidden" name="intent" value="freeze" />
+              <label style={styles.metaLabel}>Freeze reason (shown in the audit log)</label>
+              <textarea
+                name="reason"
+                required
+                rows={2}
+                style={styles.staffNoteInput}
+                placeholder="e.g. Payment dispute pending review"
+              />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="submit" style={styles.confirmFreezeBtn} disabled={submitting}>
+                  {submitting ? 'Freezing…' : 'Confirm freeze'}
+                </button>
+                <button type="button" style={styles.cancelBtn} onClick={() => setShowFreeze(false)}>Cancel</button>
+              </div>
+            </Form>
+          )}
         </div>
       </div>
 
@@ -824,5 +937,106 @@ const styles = {
     fontSize: 13,
     fontFamily: 'inherit',
     resize: 'vertical',
+  },
+
+  // ─── Account status panel ───
+  statusRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 16,
+    flexWrap: 'wrap',
+  },
+  acctBadge: {
+    display: 'inline-block',
+    fontSize: 12,
+    fontWeight: 700,
+    padding: '3px 12px',
+    borderRadius: 8,
+  },
+  freezeReasonText: {
+    fontSize: 12,
+    color: 'var(--luc-text-muted, #666)',
+    marginTop: 6,
+  },
+  statusActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  freezeBtn: {
+    padding: '7px 14px',
+    borderRadius: 8,
+    border: '1px solid #bae6fd',
+    background: '#f0f9ff',
+    color: '#0369a1',
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+  unfreezeBtn: {
+    padding: '7px 14px',
+    borderRadius: 8,
+    border: '1px solid #bae6fd',
+    background: '#e0f2fe',
+    color: '#0369a1',
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+  deactivateBtn: {
+    padding: '7px 14px',
+    borderRadius: 8,
+    border: '1px solid #fed7aa',
+    background: '#fff7ed',
+    color: '#c2410c',
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+  restoreBtn: {
+    padding: '7px 14px',
+    borderRadius: 8,
+    border: '1px solid #86efac',
+    background: '#f0fdf4',
+    color: '#059669',
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+  hardDeleteBtn: {
+    padding: '7px 14px',
+    borderRadius: 8,
+    border: '1px solid #dc2626',
+    background: '#dc2626',
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+  freezeForm: {
+    marginTop: 14,
+    paddingTop: 14,
+    borderTop: '1px solid var(--luc-border, #e0e0e0)',
+  },
+  confirmFreezeBtn: {
+    padding: '8px 16px',
+    borderRadius: 8,
+    border: 'none',
+    background: '#0369a1',
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+  cancelBtn: {
+    padding: '8px 16px',
+    borderRadius: 8,
+    border: '1px solid var(--luc-border, #e0e0e0)',
+    background: '#fff',
+    color: 'var(--luc-text, #1a1a1a)',
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: 'pointer',
   },
 };

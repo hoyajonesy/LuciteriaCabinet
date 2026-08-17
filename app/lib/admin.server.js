@@ -123,6 +123,9 @@ export async function getAllUsersWithCollectionStats() {
       email: true,
       isStaff: true,
       userType: true,
+      status: true,
+      freezeReason: true,
+      tier: true,
       createdAt: true,
       collectionItems: {
         where: { state: 'OWNED' },
@@ -152,6 +155,9 @@ export async function getAllUsersWithCollectionStats() {
       email: u.email,
       isStaff: u.isStaff,
       userType: u.userType,
+      status: u.status,
+      freezeReason: u.freezeReason,
+      tier: u.tier,
       elementsOwned: u.collectionItems.length,
       completionPercent: Math.round((u.collectionItems.length / TOTAL_ELEMENTS) * 100),
       lastActivity: u.activityLogs[0]?.createdAt?.toISOString() || null,
@@ -175,6 +181,9 @@ export async function getUserCollectionDetail(userId) {
       userType: true,
       isSubscriber: true,
       subscriptionFormat: true,
+      status: true,
+      freezeReason: true,
+      tier: true,
       createdAt: true,
     },
   });
@@ -407,6 +416,104 @@ export async function exportRestockCSV() {
     { label: 'In Stock', key: 'inStock' },
   ];
   return generateCSV(items, headers);
+}
+
+// ─── Account Lifecycle (freeze / unfreeze / deactivate / restore / delete) ──
+//
+// Ported from the legacy /admin/users console so the /app/admin console
+// (User.isStaff-gated) has full account-management teeth. `adminEmail` is
+// recorded on the FreezeLog audit trail; the caller passes the acting staff
+// member's email (from requireAdmin()).
+
+/**
+ * Freeze a single account: set status=frozen, write a FreezeLog audit row,
+ * and notify the user. Temporary, reversible lock.
+ */
+export async function freezeUser(userId, reason, adminEmail) {
+  const freezeReason = reason || "No reason provided";
+  await prisma.user.update({
+    where: { id: userId },
+    data: { status: "frozen", freezeReason },
+  });
+  await prisma.freezeLog.create({
+    data: { userId, reason: freezeReason, frozenBy: adminEmail },
+  });
+  await prisma.notification.create({
+    data: {
+      userId,
+      category: "SYSTEM",
+      title: "Account Frozen",
+      body: `Your account has been frozen. Reason: ${freezeReason}. Contact support@luciteria.com to restore access.`,
+      icon: "❄️",
+    },
+  });
+}
+
+/**
+ * Unfreeze a single account: set status=active, close the open FreezeLog row,
+ * and notify the user.
+ */
+export async function unfreezeUser(userId, adminEmail) {
+  await prisma.user.update({
+    where: { id: userId },
+    data: { status: "active", freezeReason: null },
+  });
+  const latestFreeze = await prisma.freezeLog.findFirst({
+    where: { userId, unfrozenAt: null },
+    orderBy: { frozenAt: "desc" },
+  });
+  if (latestFreeze) {
+    await prisma.freezeLog.update({
+      where: { id: latestFreeze.id },
+      data: { unfrozenAt: new Date(), unfrozenBy: adminEmail },
+    });
+  }
+  await prisma.notification.create({
+    data: {
+      userId,
+      category: "SYSTEM",
+      title: "Account Restored",
+      body: "Your account has been restored. You can now make changes to your collection.",
+      icon: "✅",
+    },
+  });
+}
+
+/**
+ * Deactivate (soft delete) one or more accounts — recoverable via restore.
+ */
+export async function deactivateUsers(userIds) {
+  return prisma.user.updateMany({
+    where: { id: { in: userIds } },
+    data: { status: "deleted" },
+  });
+}
+
+/**
+ * Restore one or more soft-deleted / frozen accounts to active.
+ */
+export async function restoreUsers(userIds) {
+  return prisma.user.updateMany({
+    where: { id: { in: userIds } },
+    data: { status: "active", freezeReason: null },
+  });
+}
+
+/**
+ * Permanently delete one or more users and ALL of their related data.
+ * Relations WITHOUT onDelete: Cascade, plus loose userId columns, are cleared
+ * manually first to avoid FK errors and orphan rows. Irreversible.
+ */
+export async function hardDeleteUsers(userIds) {
+  return prisma.$transaction([
+    prisma.userSubscription.deleteMany({ where: { userId: { in: userIds } } }),
+    prisma.creditTransaction.deleteMany({ where: { userId: { in: userIds } } }),
+    prisma.userOwnedSku.deleteMany({ where: { userId: { in: userIds } } }),
+    prisma.completionGoal.deleteMany({ where: { userId: { in: userIds } } }),
+    prisma.packOrder.deleteMany({ where: { userId: { in: userIds } } }),
+    prisma.curationRequest.deleteMany({ where: { userId: { in: userIds } } }),
+    prisma.user.deleteMany({ where: { id: { in: userIds } } }),
+  ]);
 }
 
 // ─── Auth Helpers ──────────────────────────────────────────────
