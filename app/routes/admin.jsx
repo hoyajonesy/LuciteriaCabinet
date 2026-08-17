@@ -25,11 +25,11 @@ export const loader = async ({ request }) => {
 
 const NAV_ITEMS = [
   { label: "Dashboard", path: "/admin",           icon: "📊", match: "exact" },
-  { label: "Users",     path: "/admin/users",      icon: "👥" },
+  { label: "Users",     path: "/app/admin/users",  icon: "👥" },
   { label: "Admins",    path: "/admin/admins",     icon: "🛡️" },
-  { label: "Analytics", path: "/admin/analytics",  icon: "📈" },
+  { label: "Analytics", path: "/app/admin/analytics", icon: "📈" },
   { label: "Formats",   path: "/admin/formats",    icon: "🧊" },
-  { label: "Subscription Tiers", path: "/admin/subscription-tiers", icon: "🎟️" },
+  { label: "Subscription Tiers", path: "/app/admin/subscription-tiers", icon: "🎟️" },
   { label: "Shop Metafields", path: "/admin/shop-metafields", icon: "🔧" },
   { label: "Sets",      path: "/admin/sets",       icon: "📦" },
   { label: "Notifications", path: "/admin/notifications", icon: "🔔" },
