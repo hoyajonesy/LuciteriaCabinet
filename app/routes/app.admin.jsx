@@ -2,23 +2,17 @@
  * Admin Layout — wraps all /app/admin/* routes.
  * Provides sidebar nav, tab navigation, and isStaff check.
  */
-import { json, redirect } from "@remix-run/node";
+import { json } from "@remix-run/node";
 import { Outlet, useLoaderData, Link, useLocation } from "@remix-run/react";
-import { getUserId } from "../lib/session.server.js";
 import { prisma } from "../lib/db.server.js";
+import { requireStaffUser } from "../lib/staff-session.server.js";
 import AppNav from "../components/AppNav.jsx";
 
 export const loader = async ({ request }) => {
-  const userId = await getUserId(request);
-  if (!userId) throw redirect("/onboarding/welcome");
-
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { id: true, firstName: true, lastName: true, isStaff: true },
-  });
-
-  if (!user) throw redirect("/onboarding/welcome");
-  if (!user.isStaff) throw redirect("/app/cabinet");
+  // Gate on the dedicated staff session cookie only — a consumer session
+  // grants no access here. requireStaffUser redirects to /admin-login when
+  // there is no valid staff session.
+  const user = await requireStaffUser(request);
 
   const activeTierCount = await prisma.subscriptionTier
     .count({ where: { isActive: true } })

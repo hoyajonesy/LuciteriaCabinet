@@ -11,8 +11,6 @@
  */
 import { json } from "@remix-run/node";
 import { useLoaderData, useActionData, useNavigation, Link, Outlet, useLocation } from "@remix-run/react";
-import { getUserId } from "../lib/session.server.js";
-import { prisma } from "../lib/db.server.js";
 import { requireAdmin } from "../lib/admin.server.js";
 import {
   listAllTiersForAdmin,
@@ -30,11 +28,8 @@ export async function loader({ request }) {
 }
 
 export async function action({ request }) {
-  await requireAdmin(request);
-  const userId = await getUserId(request);
-  const admin = userId
-    ? await prisma.user.findUnique({ where: { id: userId }, select: { email: true } })
-    : null;
+  const admin = await requireAdmin(request);
+  const userId = admin.id;
   const actorEmail = admin?.email || "admin";
 
   const form = await request.formData();

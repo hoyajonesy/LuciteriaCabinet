@@ -522,23 +522,10 @@ export async function hardDeleteUsers(userIds) {
  * Require admin (staff) access. Returns user or throws redirect.
  */
 export async function requireAdmin(request) {
-  // Lazy import to avoid circular deps
-  const { getUserId } = await import('./session.server.js');
-  const userId = await getUserId(request);
-
-  if (!userId) {
-    throw new Response(null, { status: 302, headers: { Location: '/onboarding/welcome' } });
-  }
-
-  const user = await prisma.user.findUnique({ where: { id: userId } });
-
-  if (!user) {
-    throw new Response(null, { status: 302, headers: { Location: '/onboarding/welcome' } });
-  }
-
-  if (!user.isStaff) {
-    throw new Response(null, { status: 302, headers: { Location: '/app/cabinet' } });
-  }
-
-  return user;
+  // The admin panel is gated on the DEDICATED staff session cookie
+  // (`__luc_staff_session`), NOT the consumer cookie. This guarantees a
+  // consumer storefront session can never reach /app/admin/* — staff must
+  // sign in separately at /admin-login. Lazy import avoids circular deps.
+  const { requireStaffUser } = await import('./staff-session.server.js');
+  return requireStaffUser(request);
 }

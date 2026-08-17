@@ -146,7 +146,7 @@ export default function AppNav({
         </div>
         <div className="footer-text">
           <p className="text-xs font-medium text-gray-700 leading-tight">{customerName}</p>
-          <Form method="post" action="/logout">
+          <Form method="post" action={mode === "admin" ? "/admin-logout" : "/logout"}>
             <button
               type="submit"
               className="text-[10px] text-gray-400 hover:text-gray-600"

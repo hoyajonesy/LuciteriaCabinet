@@ -12,8 +12,6 @@
 import { json, redirect } from "@remix-run/node";
 import { useLoaderData, useActionData, useNavigation, Link, Form } from "@remix-run/react";
 import { useState, useMemo } from "react";
-import { getUserId } from "../lib/session.server.js";
-import { prisma } from "../lib/db.server.js";
 import { requireAdmin } from "../lib/admin.server.js";
 import { getTierForAdmin, saveTier } from "../lib/tier-admin.server.js";
 import { getAllTiers } from "../lib/subscription-tiers-db.server.js";
@@ -93,11 +91,8 @@ export async function loader({ request, params }) {
 }
 
 export async function action({ request, params }) {
-  await requireAdmin(request);
-  const userId = await getUserId(request);
-  const admin = userId
-    ? await prisma.user.findUnique({ where: { id: userId }, select: { email: true } })
-    : null;
+  const admin = await requireAdmin(request);
+  const userId = admin.id;
   const actorEmail = admin?.email || "admin";
 
   const form = await request.formData();
