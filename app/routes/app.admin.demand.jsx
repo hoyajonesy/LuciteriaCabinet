@@ -12,10 +12,12 @@ import {
   getHighDemandItems,
   exportRestockCSV,
   exportDemandDataCSV,
+  requireAdmin,
 } from "../lib/admin.server.js";
 import { getContextDistribution, CONTEXT_LABELS } from "../lib/wishlist-context.server.js";
 
-export const loader = async () => {
+export const loader = async ({ request }) => {
+  await requireAdmin(request);
   const [outOfStock, highDemand, contextDist] = await Promise.all([
     getOutOfStockWatchlist(),
     getHighDemandItems(),
@@ -42,6 +44,7 @@ export const loader = async () => {
 };
 
 export const action = async ({ request }) => {
+  await requireAdmin(request);
   const formData = await request.formData();
   const intent = formData.get("intent");
   const exportType = formData.get("exportType");

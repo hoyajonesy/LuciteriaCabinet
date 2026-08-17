@@ -17,8 +17,10 @@ import StatCard from "../components/StatCard";
 
 import * as db from "../data/mock-db.server";
 import { assignNextItem, previewSequence, STRATEGIES } from "../lib/assignment-engine.server";
+import { requireAdmin } from "../lib/admin.server.js";
 
-export const loader = () => {
+export const loader = async ({ request }) => {
+  await requireAdmin(request);
   const dashStats = db.getDashboardStats();
   const upcomingAssignments = db.getUpcomingAssignments();
   const pendingExceptions = db.getPendingExceptions();

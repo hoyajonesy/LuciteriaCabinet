@@ -13,6 +13,7 @@ import { json } from "@remix-run/node";
 import { useLoaderData, useActionData, useNavigation, Link, Outlet, useLocation } from "@remix-run/react";
 import { getUserId } from "../lib/session.server.js";
 import { prisma } from "../lib/db.server.js";
+import { requireAdmin } from "../lib/admin.server.js";
 import {
   listAllTiersForAdmin,
   getRecentTierAudit,
@@ -22,12 +23,14 @@ import {
 import TierCard from "../components/tier/TierCard.jsx";
 import { auditActionLabel } from "../components/tier/tier-form-helpers.js";
 
-export async function loader() {
+export async function loader({ request }) {
+  await requireAdmin(request);
   const [tiers, audit] = await Promise.all([listAllTiersForAdmin(), getRecentTierAudit(15)]);
   return json({ tiers, audit });
 }
 
 export async function action({ request }) {
+  await requireAdmin(request);
   const userId = await getUserId(request);
   const admin = userId
     ? await prisma.user.findUnique({ where: { id: userId }, select: { email: true } })

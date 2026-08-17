@@ -15,6 +15,7 @@ import { json } from "@remix-run/node";
 import { useLoaderData, Form, useActionData, useNavigation } from "@remix-run/react";
 import { prisma } from "../lib/db.server.js";
 import { getUserId } from "../lib/session.server.js";
+import { requireAdmin } from "../lib/admin.server.js";
 import {
   getUpcomingAssignments,
   applyManualOverride,
@@ -42,6 +43,7 @@ function parseArray(value) {
 }
 
 export async function loader({ request }) {
+  await requireAdmin(request);
   const { previews, pendingReview } = await getUpcomingAssignments({ limit: 100 });
 
   // Eligible products for override selection (active, in stock, subscription
@@ -100,6 +102,7 @@ export async function loader({ request }) {
 }
 
 export async function action({ request }) {
+  await requireAdmin(request);
   const userId = await getUserId(request);
   const admin = userId
     ? await prisma.user.findUnique({ where: { id: userId }, select: { email: true } })

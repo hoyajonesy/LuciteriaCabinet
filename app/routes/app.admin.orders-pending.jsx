@@ -6,10 +6,12 @@
 import { json } from "@remix-run/node";
 import { useLoaderData, Form, useActionData, useNavigation } from "@remix-run/react";
 import { prisma } from "../lib/db.server.js";
+import { requireAdmin } from "../lib/admin.server.js";
 import AppNav from "../components/AppNav.jsx";
 import ApprovalQueue from "../components/ApprovalQueue.jsx";
 
-export async function loader() {
+export async function loader({ request }) {
+  await requireAdmin(request);
   const pendingOrders = await prisma.packOrder.findMany({
     where: { status: "PENDING" },
     orderBy: { createdAt: "asc" },
@@ -52,6 +54,7 @@ export async function loader() {
 }
 
 export async function action({ request }) {
+  await requireAdmin(request);
   const form = await request.formData();
   const intent = form.get("intent");
   const orderId = form.get("orderId");

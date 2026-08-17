@@ -6,14 +6,16 @@
 import { json } from "@remix-run/node";
 import { useLoaderData, Link } from "@remix-run/react";
 import { useState } from "react";
-import { getAllUsersWithCollectionStats, exportUsersCSV } from "../lib/admin.server.js";
+import { getAllUsersWithCollectionStats, exportUsersCSV, requireAdmin } from "../lib/admin.server.js";
 
-export const loader = async () => {
+export const loader = async ({ request }) => {
+  await requireAdmin(request);
   const users = await getAllUsersWithCollectionStats();
   return json({ users });
 };
 
 export const action = async ({ request }) => {
+  await requireAdmin(request);
   const formData = await request.formData();
   const intent = formData.get("intent");
 

@@ -11,8 +11,10 @@ import StatCard from "../components/StatCard";
 
 import * as db from "../data/mock-db.server";
 import { getAdminCollectionMetrics } from "../lib/collection.server";
+import { requireAdmin } from "../lib/admin.server.js";
 
-export const loader = async () => {
+export const loader = async ({ request }) => {
+  await requireAdmin(request);
   const dashStats = db.getDashboardStats();
   const customers = db.getCustomers();
   const products = db.getProducts();

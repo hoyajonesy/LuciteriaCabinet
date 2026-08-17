@@ -10,10 +10,12 @@ import {
   getTopCollectedElements,
   getTopWantedElements,
   getRecentActivity,
+  requireAdmin,
 } from "../lib/admin.server.js";
 import MetricCard from "../components/admin/MetricCard.jsx";
 
-export const loader = async () => {
+export const loader = async ({ request }) => {
+  await requireAdmin(request);
   const [stats, topCollected, topWanted, recentActivity] = await Promise.all([
     getAdminOverviewStats(),
     getTopCollectedElements(10),

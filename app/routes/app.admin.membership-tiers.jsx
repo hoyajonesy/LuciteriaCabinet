@@ -7,9 +7,11 @@ import { json } from "@remix-run/node";
 import { useLoaderData, Form, useActionData, useNavigation } from "@remix-run/react";
 import { useState } from "react";
 import { prisma } from "../lib/db.server.js";
+import { requireAdmin } from "../lib/admin.server.js";
 import AppNav from "../components/AppNav.jsx";
 
-export async function loader() {
+export async function loader({ request }) {
+  await requireAdmin(request);
   const tiers = await prisma.membershipTier.findMany({
     orderBy: { sortOrder: "asc" },
     include: { _count: { select: { users: true, userSubscriptions: true } } },
@@ -18,6 +20,7 @@ export async function loader() {
 }
 
 export async function action({ request }) {
+  await requireAdmin(request);
   const form = await request.formData();
   const intent = form.get("intent");
 

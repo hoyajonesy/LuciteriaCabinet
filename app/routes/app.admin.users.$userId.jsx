@@ -44,7 +44,8 @@ function onboardingBadgeStyle(status) {
   return { ...base, background: '#fef3c7', color: '#b45309' }; // PENDING
 }
 
-export const loader = async ({ params }) => {
+export const loader = async ({ request, params }) => {
+  await requireAdmin(request);
   const detail = await getUserCollectionDetail(params.userId);
   if (!detail) throw redirect("/app/admin/users");
 

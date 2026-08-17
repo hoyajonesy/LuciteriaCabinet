@@ -9,6 +9,7 @@ import { useLoaderData, Form, useActionData } from "@remix-run/react";
 import { useState } from "react";
 
 import * as db from "../data/mock-db.server";
+import { requireAdmin } from "../lib/admin.server.js";
 
 // Mock pricing data
 const PRICING_CONFIG = {
@@ -27,7 +28,8 @@ const PRICE_HISTORY = [
   { date: "2026-01-20", type: "10mm", field: "quarterly", oldPrice: 129.99, newPrice: 139.99, changedBy: "Admin" },
 ];
 
-export const loader = () => {
+export const loader = async ({ request }) => {
+  await requireAdmin(request);
   const dashStats = db.getDashboardStats();
   const customers = db.getCustomers();
   const breakdown = dashStats.collectionTypeBreakdown || [];
@@ -62,6 +64,7 @@ export const loader = () => {
 };
 
 export const action = async ({ request }) => {
+  await requireAdmin(request);
   // Mock save action — in production this would persist to DB
   const formData = await request.formData();
   const type = formData.get("collectionType");

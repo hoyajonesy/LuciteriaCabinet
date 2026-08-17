@@ -16,8 +16,10 @@ import PeriodicTable from "../components/PeriodicTable";
 import * as db from "../data/mock-db.server";
 import { getBillingSummary } from "../lib/billing.server.js";
 import { ELEMENTS_118, isAvailableForCollection, isPreciousMetal } from "../data/elements.server";
+import { requireAdmin } from "../lib/admin.server.js";
 
-export const loader = ({ params }) => {
+export const loader = async ({ request, params }) => {
+  await requireAdmin(request);
   const customerId = params.id;
   const customer = db.getCustomerById(customerId);
   if (!customer) {

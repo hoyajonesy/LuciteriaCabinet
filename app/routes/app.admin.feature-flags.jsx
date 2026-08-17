@@ -5,6 +5,7 @@
 import { json } from "@remix-run/node";
 import { useLoaderData, useFetcher } from "@remix-run/react";
 import { prisma } from "../lib/db.server.js";
+import { requireAdmin } from "../lib/admin.server.js";
 import AppNav from "../components/AppNav.jsx";
 import PhaseToggle from "../components/PhaseToggle.jsx";
 
@@ -15,12 +16,14 @@ const FLAG_META = {
   phase3_enabled: { label: "Phase 3: Dynamic Curation", phase: 3 },
 };
 
-export async function loader() {
+export async function loader({ request }) {
+  await requireAdmin(request);
   const flags = await prisma.featureFlag.findMany({ orderBy: { flagName: "asc" } });
   return json({ flags });
 }
 
 export async function action({ request }) {
+  await requireAdmin(request);
   const form = await request.formData();
   const flagName = form.get("flagName");
   const isEnabled = form.get("isEnabled") === "true";

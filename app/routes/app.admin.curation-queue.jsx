@@ -5,8 +5,10 @@
 import { json } from "@remix-run/node";
 import { useLoaderData } from "@remix-run/react";
 import AppNav from "../components/AppNav.jsx";
+import { requireAdmin } from "../lib/admin.server.js";
 
-export async function loader() {
+export async function loader({ request }) {
+  await requireAdmin(request);
   return json({ phase3Enabled: false });
 }
 

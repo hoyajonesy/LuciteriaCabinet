@@ -7,8 +7,10 @@ import { useState } from "react";
 import ProgressBar from "../components/ProgressBar";
 
 import * as db from "../data/mock-db.server";
+import { requireAdmin } from "../lib/admin.server.js";
 
-export const loader = () => {
+export const loader = async ({ request }) => {
+  await requireAdmin(request);
   const customers = db.getCustomers();
   const customerData = customers.map((c) => ({
     ...c,
