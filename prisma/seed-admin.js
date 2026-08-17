@@ -70,9 +70,18 @@ const MOCK_USERS = [
 async function main() {
   console.log("🌱 Seeding Admin Backend MVP data...\n");
 
+  // Seed passwords are supplied via env vars — never hardcoded.
+  const seedPassword = process.env.ADMIN_SEED_PASSWORD;
+  if (!seedPassword) {
+    throw new Error(
+      "ADMIN_SEED_PASSWORD env var is required to seed admin users. " +
+        "Set it before running this seed (it is never logged)."
+    );
+  }
+
   // ─── 1. Admin Users ───
   console.log("👤 Creating admin users...");
-  const adminPass = await bcrypt.hash("admin123", 10);
+  const adminPass = await bcrypt.hash(seedPassword, 10);
 
   const admins = [
     { name: "Admin User", email: "admin@luciteria.com" },
@@ -86,7 +95,7 @@ async function main() {
       create: { ...a, passwordHash: adminPass },
     });
   }
-  console.log(`   ✅ ${admins.length} admin users created (password: admin123)\n`);
+  console.log(`   ✅ ${admins.length} admin users created\n`);
 
   // ─── 2. Formats ───
   console.log("📐 Creating formats...");
@@ -349,9 +358,8 @@ async function main() {
   console.log(`  Collection Items:${counts.collections}`);
   console.log(`  Awards Given:    ${counts.awards}`);
   console.log("═══════════════════════════════════════");
-  console.log("\n🔑 Admin Login Credentials:");
-  console.log("   Email: admin@luciteria.com");
-  console.log("   Password: admin123\n");
+  console.log("\n🔑 Admin login email: admin@luciteria.com");
+  console.log("   Password: (value of ADMIN_SEED_PASSWORD)\n");
 }
 
 main()

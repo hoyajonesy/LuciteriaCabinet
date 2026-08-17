@@ -420,7 +420,14 @@ async function main() {
       await prisma.user.update({ where: { email: adminEmail }, data: { isStaff: true } });
       console.log(`   ✓ Admin user already exists (${adminEmail}) — ensured isStaff=true`);
     } else {
-      const passwordHash = await bcrypt.hash("admin123", 10);
+      const seedPassword = process.env.ADMIN_SEED_PASSWORD;
+      if (!seedPassword) {
+        throw new Error(
+          "ADMIN_SEED_PASSWORD env var is required to seed the admin user. " +
+            "Set it before running this seed (it is never logged)."
+        );
+      }
+      const passwordHash = await bcrypt.hash(seedPassword, 10);
       await prisma.user.create({
         data: {
           email: adminEmail,
@@ -433,7 +440,7 @@ async function main() {
           wishlistToken: uuidv4(),
         },
       });
-      console.log(`   ✓ Admin user created: ${adminEmail} / admin123`);
+      console.log(`   ✓ Admin user created: ${adminEmail}`);
     }
 
     // Also promote the first existing user to staff (for testing convenience)
