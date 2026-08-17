@@ -14,6 +14,7 @@ import { useLoaderData, useActionData, useNavigation, Link, Form } from "@remix-
 import { useState, useMemo } from "react";
 import { getUserId } from "../lib/session.server.js";
 import { prisma } from "../lib/db.server.js";
+import { requireAdmin } from "../lib/admin.server.js";
 import { getTierForAdmin, saveTier } from "../lib/tier-admin.server.js";
 import { getAllTiers } from "../lib/subscription-tiers-db.server.js";
 import PricingFields from "../components/tier/PricingFields.jsx";
@@ -27,7 +28,8 @@ import {
   slugifyKey,
 } from "../components/tier/tier-form-helpers.js";
 
-export async function loader({ params }) {
+export async function loader({ request, params }) {
+  await requireAdmin(request);
   const { tierId } = params;
   const isNew = tierId === "new";
 
@@ -91,6 +93,7 @@ export async function loader({ params }) {
 }
 
 export async function action({ request, params }) {
+  await requireAdmin(request);
   const userId = await getUserId(request);
   const admin = userId
     ? await prisma.user.findUnique({ where: { id: userId }, select: { email: true } })
