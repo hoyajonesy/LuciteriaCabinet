@@ -10,6 +10,7 @@
  */
 import { json } from "@remix-run/node";
 import { useLoaderData, useActionData, useNavigation, Form } from "@remix-run/react";
+import { useState, useEffect } from "react";
 import { requireAdmin } from "../lib/admin-session.server.js";
 import { FORMATS } from "../lib/formats.js";
 import { loadVariantAudit, applyFixes } from "../lib/shop-metafields.server.js";
@@ -35,6 +36,9 @@ export const action = async ({ request }) => {
     if (id) variantIds = [id];
   } else if (intent === "fix-all") {
     variantIds = form.getAll("variantId");
+  } else if (intent === "fix-batch") {
+    const idsStr = form.get("selectedIds");
+    variantIds = idsStr ? JSON.parse(idsStr) : [];
   }
 
   if (!variantIds.length) {
@@ -58,6 +62,35 @@ export default function ShopMetafieldsAdmin() {
   const actionData = useActionData();
   const nav = useNavigation();
   const busy = nav.state !== "idle";
+
+  const [selected, setSelected] = useState(new Set());
+
+  // Clear selection after successful batch fix
+  useEffect(() => {
+    if (actionData?.result && !actionData?.error) {
+      setSelected(new Set());
+    }
+  }, [actionData]);
+
+  const toggleSelection = (variantId) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(variantId)) {
+        next.delete(variantId);
+      } else {
+        next.add(variantId);
+      }
+      return next;
+    });
+  };
+
+  const selectAll = (variantIds) => {
+    setSelected(new Set(variantIds));
+  };
+
+  const deselectAll = () => {
+    setSelected(new Set());
+  };
 
   return (
     <div>
@@ -128,16 +161,40 @@ export default function ShopMetafieldsAdmin() {
               title={`Needs fix (${audit.buckets.needsFix.length})`}
               subtitle="Current metafield differs from the format implied by the product. Review the proposed value, then fix."
             >
-              <Form method="post" style={{ marginBottom: 12 }}>
-                <input type="hidden" name="intent" value="fix-all" />
-                {audit.buckets.needsFix.map((r) => (
-                  <input key={r.variantId} type="hidden" name="variantId" value={r.variantId} />
-                ))}
-                <button type="submit" disabled={busy} style={primaryBtn}>
-                  {busy ? "Working…" : `Fix all ${audit.buckets.needsFix.length}`}
+              <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={() => selectAll(audit.buckets.needsFix.map((r) => r.variantId))}
+                  style={secondaryBtn}
+                  disabled={busy}
+                >
+                  Select all
                 </button>
-              </Form>
-              <FixTable rows={audit.buckets.needsFix} busy={busy} showFix />
+                <button
+                  type="button"
+                  onClick={deselectAll}
+                  style={secondaryBtn}
+                  disabled={busy || selected.size === 0}
+                >
+                  Deselect all
+                </button>
+                {selected.size > 0 ? (
+                  <Form method="post">
+                    <input type="hidden" name="intent" value="fix-batch" />
+                    <input type="hidden" name="selectedIds" value={JSON.stringify([...selected])} />
+                    <button type="submit" disabled={busy} style={primaryBtn}>
+                      {busy ? "Working…" : `Fix selected (${selected.size})`}
+                    </button>
+                  </Form>
+                ) : null}
+              </div>
+              <FixTable
+                rows={audit.buckets.needsFix}
+                busy={busy}
+                showFix
+                selected={selected}
+                onToggle={toggleSelection}
+              />
             </Section>
           )}
 
@@ -167,12 +224,13 @@ export default function ShopMetafieldsAdmin() {
   );
 }
 
-function FixTable({ rows, busy, showFix }) {
+function FixTable({ rows, busy, showFix, selected = new Set(), onToggle = () => {} }) {
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={table}>
         <thead>
           <tr>
+            {showFix && <th style={{ ...th, width: 40 }}></th>}
             <th style={th}>Symbol</th>
             <th style={th}>Product</th>
             <th style={th}>Variant</th>
@@ -185,6 +243,17 @@ function FixTable({ rows, busy, showFix }) {
         <tbody>
           {rows.map((r) => (
             <tr key={r.variantId}>
+              {showFix && (
+                <td style={{ ...td, textAlign: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(r.variantId)}
+                    onChange={() => onToggle(r.variantId)}
+                    disabled={busy}
+                    style={{ cursor: "pointer", width: 16, height: 16 }}
+                  />
+                </td>
+              )}
               <td style={{ ...td, fontWeight: 600 }}>{r.symbol || "—"}</td>
               <td style={td}>{r.productTitle}</td>
               <td style={td}>{r.variantTitle}</td>
@@ -261,4 +330,5 @@ const th = { textAlign: "left", padding: "8px 10px", borderBottom: "2px solid #e
 const td = { padding: "8px 10px", borderBottom: "1px solid #f3f4f6", color: "#374151", verticalAlign: "top" };
 const tag = { display: "inline-block", padding: "2px 8px", borderRadius: 12, background: "#f3f4f6", color: "#374151", fontSize: 12, marginRight: 4 };
 const primaryBtn = { background: "#111827", color: "#fff", border: "none", padding: "9px 18px", borderRadius: 6, fontSize: 14, fontWeight: 600, cursor: "pointer" };
+const secondaryBtn = { background: "#fff", color: "#374151", border: "1px solid #d1d5db", padding: "9px 18px", borderRadius: 6, fontSize: 14, fontWeight: 600, cursor: "pointer" };
 const smallBtn = { background: "#2563eb", color: "#fff", border: "none", padding: "5px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" };
