@@ -29,6 +29,7 @@ const ADMIN_TABS = [
   { label: "Swap Window", path: "/app/admin/swap-window", icon: "🔄" },
   { label: "Demand", path: "/app/admin/demand", icon: "🔥" },
   { label: "Analytics", path: "/app/admin/analytics", icon: "📈" },
+  { label: "Shop Metafields", path: "/app/admin/shop-metafields", icon: "🔧" },
 ];
 
 export default function AdminLayout() {

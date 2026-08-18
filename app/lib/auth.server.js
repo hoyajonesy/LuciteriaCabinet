@@ -371,6 +371,16 @@ function hashOnboardingToken(rawToken) {
 }
 
 /**
+ * Hash a staff password-reset token before it is stored / looked up. Mirrors
+ * the onboarding-token precedent: the raw token only ever lives in the emailed
+ * link, and the database stores only its SHA-256 hash, so a DB dump cannot be
+ * used to mint working admin password-reset links.
+ */
+export function hashStaffResetToken(rawToken) {
+  return crypto.createHash("sha256").update(String(rawToken)).digest("hex");
+}
+
+/**
  * Create a single-use onboarding magic-link token for a user, bound to a specific
  * subscription contract (FR-12). Returns { rawToken, user }.
  */

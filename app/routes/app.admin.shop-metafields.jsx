@@ -11,7 +11,7 @@
 import { json } from "@remix-run/node";
 import { useLoaderData, useActionData, useNavigation, Form } from "@remix-run/react";
 import { useState, useEffect } from "react";
-import { requireAdmin } from "../lib/admin-session.server.js";
+import { requireAdmin } from "../lib/admin.server.js";
 import { FORMATS } from "../lib/formats.js";
 import { loadVariantAudit, applyFixes } from "../lib/shop-metafields.server.js";
 

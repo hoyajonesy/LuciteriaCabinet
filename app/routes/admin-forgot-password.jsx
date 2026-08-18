@@ -13,6 +13,7 @@ import { json, redirect } from "@remix-run/node";
 import { useActionData, useNavigation, Form, Link } from "@remix-run/react";
 import { prisma } from "../lib/db.server.js";
 import { getStaffUserId } from "../lib/staff-session.server.js";
+import { hashStaffResetToken } from "../lib/auth.server.js";
 
 const TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -36,14 +37,16 @@ export const action = async ({ request }) => {
     });
 
     if (user) {
-      const token = crypto.randomBytes(32).toString("hex");
+      // The raw token only ever appears in the reset link; the database stores
+      // only its SHA-256 hash, so a DB dump can't yield working reset links.
+      const rawToken = crypto.randomBytes(32).toString("hex");
       const expiresAt = new Date(Date.now() + TOKEN_TTL_MS);
 
       await prisma.staffPasswordResetToken.create({
-        data: { token, userId: user.id, expiresAt },
+        data: { token: hashStaffResetToken(rawToken), userId: user.id, expiresAt },
       });
 
-      const resetUrl = `/admin-reset-password/${token}`;
+      const resetUrl = `/admin-reset-password/${rawToken}`;
       // TODO: replace with real email send when provider is configured (Resend/SendGrid/SMTP)
       console.log(`[STAFF PASSWORD RESET] Token for ${email}: ${resetUrl}`);
     }

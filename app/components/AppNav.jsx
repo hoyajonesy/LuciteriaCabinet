@@ -30,6 +30,7 @@ const ADMIN_NAV = [
   { label: "Assignments", path: "/app/admin/subscription-assignments", icon: "fa-boxes-stacked" },
   { label: "Customers", path: "/app/admin/customers", icon: "fa-address-book" },
   { label: "Pricing", path: "/app/admin/pricing", icon: "fa-dollar-sign" },
+  { label: "Shop Metafields", path: "/app/admin/shop-metafields", icon: "fa-wrench" },
 ];
 
 export default function AppNav({

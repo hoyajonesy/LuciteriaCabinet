@@ -9,14 +9,16 @@
 import { json, redirect } from "@remix-run/node";
 import { useLoaderData, useActionData, useNavigation, Form, Link } from "@remix-run/react";
 import { prisma } from "../lib/db.server.js";
-import { hashPassword } from "../lib/auth.server.js";
+import { hashPassword, hashStaffResetToken } from "../lib/auth.server.js";
 
 const MIN_PASSWORD_LENGTH = 8;
 
-async function findValidToken(token) {
-  if (!token) return null;
+async function findValidToken(rawToken) {
+  if (!rawToken) return null;
+  // The DB stores only the SHA-256 hash of the token, so hash the raw value
+  // from the URL before looking it up.
   return prisma.staffPasswordResetToken.findFirst({
-    where: { token, usedAt: null, expiresAt: { gt: new Date() } },
+    where: { token: hashStaffResetToken(rawToken), usedAt: null, expiresAt: { gt: new Date() } },
     include: { user: { select: { id: true, email: true } } },
   });
 }
