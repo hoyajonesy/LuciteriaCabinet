@@ -5,13 +5,14 @@
  * codebase can be deployed (or fronted) as two separate sites:
  *
  *   admin.luciteria.com
- *     - "/"                     → redirect to "/admin/login"
- *     - any non "/admin" path   → redirect to "/admin/login"
- *     - "/admin/*"              → allowed
+ *     - "/admin/*"              → allowed (legacy AdminUser shell)
+ *     - "/admin-login"          → allowed (new staff login)
+ *     - "/app/admin/*"          → allowed (staff admin panel)
+ *     - anything else           → redirect to "/admin-login"
  *
  *   app.luciteria.com
- *     - "/admin" or "/admin/*"  → 404 (admin is invisible on the consumer host)
- *     - everything else         → allowed
+ *     - "/admin/*", "/admin-login", "/app/admin/*" → 404 (admin invisible on consumer host)
+ *     - everything else                             → allowed
  *
  *   localhost / IPs / *.local / preview hosts / apex / www
  *     - everything allowed (routing rules NOT enforced)
@@ -121,10 +122,15 @@ export function getMarketingRedirect(pathname, search = "") {
  */
 export function isAdminPath(pathname) {
   return (
+    // Legacy /admin/* shell (AdminUser system)
     pathname === ADMIN_PATH_PREFIX ||
     pathname.startsWith(ADMIN_PATH_PREFIX + "/") ||
+    // New staff login / logout pages
     pathname === "/admin-login" ||
-    pathname === "/admin-logout"
+    pathname === "/admin-logout" ||
+    // Staff admin panel at /app/admin/* (User.isStaff system)
+    pathname === "/app/admin" ||
+    pathname.startsWith("/app/admin/")
   );
 }
 
