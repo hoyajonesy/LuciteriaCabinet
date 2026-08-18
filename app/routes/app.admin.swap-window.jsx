@@ -77,6 +77,28 @@ export const action = async ({ request }) => {
     }
   }
 
+  if (intent === "test-cron") {
+    try {
+      const cronSecret = process.env.CRON_SECRET;
+      if (!cronSecret) {
+        return json({ error: "CRON_SECRET not configured in environment." }, { status: 500 });
+      }
+
+      const url = new URL(request.url);
+      const cronUrl = `${url.protocol}//${url.host}/api/cron`;
+
+      const response = await fetch(cronUrl, {
+        method: "POST",
+        headers: { "X-Cron-Secret": cronSecret, "Content-Type": "application/json" },
+      });
+
+      const result = await response.json();
+      return json({ ok: true, kind: "cron", result, status: response.status });
+    } catch (e) {
+      return json({ error: e.message || "Cron test failed." }, { status: 500 });
+    }
+  }
+
   return json({ error: "Unknown action." }, { status: 400 });
 };
 
@@ -86,6 +108,7 @@ export default function AdminSwapWindow() {
   const nav = useNavigation();
   const runningClose = nav.state !== "idle" && nav.formData?.get("intent") === "run-close-job";
   const runningExpiry = nav.state !== "idle" && nav.formData?.get("intent") === "run-expiry-sweep";
+  const runningCron = nav.state !== "idle" && nav.formData?.get("intent") === "test-cron";
 
   return (
     <div>
@@ -172,6 +195,40 @@ export default function AdminSwapWindow() {
             <input type="hidden" name="intent" value="run-expiry-sweep" />
             <button type="submit" style={{ ...styles.runBtnAlt, opacity: runningExpiry ? 0.6 : 1 }} disabled={runningExpiry}>
               {runningExpiry ? "Running…" : `Run expiry sweep${due.expiry > 0 ? ` (${due.expiry} due)` : ""}`}
+            </button>
+          </Form>
+        </div>
+      </div>
+
+      {/* Cron endpoint test */}
+      <div style={styles.card}>
+        <div style={styles.cardHeader}>
+          <h3 style={styles.cardTitle}>🧪 Test cron endpoint</h3>
+        </div>
+        <div style={styles.cardBody}>
+          <p style={styles.jobDesc}>
+            Manually trigger the /api/cron endpoint to test all three scheduled jobs at once
+            (swap window close, onboarding grace, credit expiry). This simulates what Vercel Cron
+            will run hourly in production.
+          </p>
+          {actionData?.ok && actionData.kind === "cron" && actionData.result && (
+            <div style={styles.noticeOk}>
+              Cron endpoint test complete (HTTP {actionData.status}).
+              {actionData.result.success ? (
+                <>
+                  <br />• Swap window: {JSON.stringify(actionData.result.results?.swapWindowClose || {})}
+                  <br />• Onboarding grace: {JSON.stringify(actionData.result.results?.onboardingGrace || {})}
+                  <br />• Credit expiry: {JSON.stringify(actionData.result.results?.creditExpiry || {})}
+                </>
+              ) : (
+                <> Error: {actionData.result.error}</>
+              )}
+            </div>
+          )}
+          <Form method="post">
+            <input type="hidden" name="intent" value="test-cron" />
+            <button type="submit" style={{ ...styles.runBtn, opacity: runningCron ? 0.6 : 1, background: "#7c3aed" }} disabled={runningCron}>
+              {runningCron ? "Testing..." : "Test cron endpoint"}
             </button>
           </Form>
         </div>

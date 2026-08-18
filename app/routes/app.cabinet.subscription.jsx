@@ -8,33 +8,122 @@ import { json, redirect } from "@remix-run/node";
 import { useLoaderData } from "@remix-run/react";
 import AppNav from "../components/AppNav";
 import { getBillingSummary, generateBillingSchedule } from "../lib/billing.server.js";
+import { getUserId } from "../lib/session.server.js";
+import { getUserById } from "../lib/auth.server.js";
+import { prisma } from "../lib/db.server.js";
 
-import * as db from "../data/mock-db.server";
+export const loader = async ({ request }) => {
+  const userId = await getUserId(request);
+  if (!userId) return redirect("/onboarding/welcome");
 
-export const loader = ({ request }) => {
-  // Route gated: not part of the main-dashboard nav. Redirect to dashboard.
-  return redirect("/app/cabinet");
-  const url = new URL(request.url);
-  const customerId = url.searchParams.get("customer") || "cust_001";
+  const authUser = await getUserById(userId);
+  if (!authUser) return redirect("/onboarding/welcome");
 
-  const customer = db.getCustomerById(customerId);
-  const collectionType = customer?.collectionType || "lucite";
-  const subscription = db.getSubscription(customerId);
-  const shipments = db.getShipments(customerId);
-  const stats = db.getCustomerStats(customerId);
+  // Find the Customer record via shopifyCustomerId
+  const customer = authUser.shopifyCustomerId
+    ? await prisma.customer.findUnique({
+        where: { shopifyCustomerId: authUser.shopifyCustomerId },
+      })
+    : null;
 
+  if (!customer) {
+    // No customer record = no subscription possible
+    return json({
+      customer: {
+        firstName: authUser.firstName,
+        lastName: authUser.lastName,
+        displayName: authUser.firstName || "Collector",
+      },
+      subscription: null,
+      shipments: [],
+      stats: { totalShipments: 0, totalSpent: 0, currentMonthSpent: 0 },
+      customerId: null,
+      collectionType: "lucite",
+      billingSummary: null,
+      billingSchedule: [],
+    });
+  }
+
+  // Find the Subscription by customerId
+  const subscription = await prisma.subscription.findUnique({
+    where: { customerId: customer.id },
+  });
+
+  // Map Subscription to the shape expected by the UI
+  const mappedSubscription = subscription
+    ? {
+        id: subscription.id,
+        planName: subscription.planName,
+        planTier: subscription.planTier,
+        status: subscription.status,
+        billingCadence: subscription.billingCadence,
+        priceUsd: subscription.priceUsd,
+        nextShipmentDate: subscription.nextShipmentDate,
+        nextBillingDate: subscription.nextBillingDate,
+        startDate: subscription.startDate,
+        itemsPerShipment: subscription.itemsPerShipment,
+        collectionType: subscription.collectionType,
+        priceLockedAt: subscription.priceLockedAt,
+        priceExpiresAt: subscription.priceExpiresAt,
+        originalPrice: subscription.originalPrice,
+        currentPrice: subscription.currentPrice,
+        grandfathered: subscription.grandfathered,
+        pausedAt: subscription.pausedAt,
+        cancelledAt: subscription.cancelledAt,
+      }
+    : null;
+
+  // Get shipments (simplified — map to the structure expected by UI)
+  const shipments = subscription
+    ? await prisma.subscriptionShipment.findMany({
+        where: { subscriptionId: subscription.id },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+      })
+    : [];
+
+  // Compute billing summary and schedule
   let billingSummary = null;
   let billingSchedule = [];
-  if (subscription) {
-    billingSummary = getBillingSummary(subscription);
+  if (mappedSubscription) {
+    billingSummary = getBillingSummary(mappedSubscription);
     billingSchedule = generateBillingSchedule(
-      subscription.startDate,
-      subscription.priceUsd,
+      mappedSubscription.startDate,
+      mappedSubscription.priceUsd,
       4
     );
   }
 
-  return json({ customer, subscription, shipments, stats, customerId, collectionType, billingSummary, billingSchedule });
+  // Compute basic stats from shipments
+  const stats = {
+    totalShipments: shipments.length,
+    totalSpent: shipments.reduce((sum, s) => sum + (s.assignedPrice || 0), 0),
+    currentMonthSpent: 0, // Simplified for now
+  };
+
+  return json({
+    customer: {
+      firstName: customer.firstName,
+      lastName: customer.lastName,
+      displayName: customer.displayName,
+    },
+    subscription: mappedSubscription,
+    shipments: shipments.map((s) => ({
+      id: s.id,
+      date: s.createdAt,
+      status: s.status,
+      tracking: s.trackingNumber,
+      items: [], // Simplified — real impl would join products
+      retailPrice: s.retailPrice || 0,
+      assignedPrice: s.assignedPrice || 0,
+      discountPercent: 0,
+    })),
+    stats,
+    customerId: customer.id,
+    collectionType: subscription?.collectionType || customer.collectionType || "lucite",
+    billingSummary,
+    billingSchedule,
+  });
 };
 
 export default function SubscriptionPage() {
@@ -152,11 +241,33 @@ export default function SubscriptionPage() {
             </div>
           )}
 
-          {/* Actions */}
-          <div style={styles.actionRow}>
-            <button style={styles.skipBtn}>⏭ Skip Next Shipment</button>
-            <button style={styles.pauseBtn}>⏸ Pause Subscription</button>
-            <button style={styles.cancelBtn}>Cancel</button>
+          {/* Manage via Seal Portal */}
+          <div style={styles.manageBox}>
+            <div style={styles.manageIcon}>⚙️</div>
+            <div style={styles.manageContent}>
+              <div style={styles.manageTitle}>Manage Your Subscription</div>
+              <div style={styles.manageText}>
+                Pause, skip, or cancel your subscription anytime through our secure customer portal.
+              </div>
+              <div style={styles.manageLinks}>
+                <a
+                  href="/a/subscriptions/manage"
+                  style={styles.portalLinkPrimary}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Manage Subscription →
+                </a>
+                <a
+                  href="/a/subscriptions/login"
+                  style={styles.portalLinkSecondary}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Request login link
+                </a>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -332,19 +443,27 @@ const styles = {
     fontSize: 12, color: "var(--luc-text-muted)", background: "#eff6ff",
     padding: "8px 12px", borderRadius: 8, marginBottom: 16,
   },
-  actionRow: { display: "flex", gap: 8, paddingTop: 16, borderTop: "1px solid var(--luc-border)" },
-  skipBtn: {
-    padding: "8px 16px", borderRadius: 8, border: "1px solid var(--luc-border)",
-    background: "transparent", color: "var(--luc-text)", fontSize: 13, cursor: "pointer",
+  manageBox: {
+    display: "flex", gap: 14, alignItems: "flex-start",
+    padding: 16, background: "#f9fafb", border: "1px solid var(--luc-border)",
+    borderRadius: 10, marginTop: 16,
   },
-  pauseBtn: {
-    padding: "8px 16px", borderRadius: 8, border: "1px solid var(--luc-warning)",
-    background: "transparent", color: "var(--luc-warning)", fontSize: 13, cursor: "pointer",
+  manageIcon: { fontSize: 24, flexShrink: 0 },
+  manageContent: { flex: 1 },
+  manageTitle: { fontSize: 14, fontWeight: 700, color: "var(--luc-text)", marginBottom: 4 },
+  manageText: { fontSize: 13, color: "var(--luc-text-muted)", marginBottom: 12, lineHeight: 1.4 },
+  manageLinks: { display: "flex", gap: 10, flexWrap: "wrap" },
+  portalLinkPrimary: {
+    display: "inline-block", padding: "8px 16px", borderRadius: 8,
+    background: "var(--luc-accent, #2563eb)", color: "#fff",
+    fontSize: 13, fontWeight: 600, textDecoration: "none",
+    transition: "all 0.15s",
   },
-  cancelBtn: {
-    padding: "8px 16px", borderRadius: 8, border: "1px solid var(--luc-danger)",
-    background: "transparent", color: "var(--luc-danger)", fontSize: 13, cursor: "pointer",
-    marginLeft: "auto",
+  portalLinkSecondary: {
+    display: "inline-block", padding: "8px 16px", borderRadius: 8,
+    background: "transparent", border: "1px solid var(--luc-border)",
+    color: "var(--luc-text)", fontSize: 13, fontWeight: 600,
+    textDecoration: "none", transition: "all 0.15s",
   },
   section: { marginBottom: 32 },
   sectionTitle: {
