@@ -27,7 +27,7 @@
 import { redirect } from "@remix-run/node";
 import { getSubdomainInfo } from "./subdomain.server.js";
 
-export const ADMIN_LOGIN_PATH = "/admin/login";
+export const ADMIN_LOGIN_PATH = "/admin-login";
 export const ADMIN_PATH_PREFIX = "/admin";
 
 /**
@@ -120,7 +120,12 @@ export function getMarketingRedirect(pathname, search = "") {
  * @param {string} pathname
  */
 export function isAdminPath(pathname) {
-  return pathname === ADMIN_PATH_PREFIX || pathname.startsWith(ADMIN_PATH_PREFIX + "/");
+  return (
+    pathname === ADMIN_PATH_PREFIX ||
+    pathname.startsWith(ADMIN_PATH_PREFIX + "/") ||
+    pathname === "/admin-login" ||
+    pathname === "/admin-logout"
+  );
 }
 
 /** Should this path bypass all routing rules (asset/system path)? */
