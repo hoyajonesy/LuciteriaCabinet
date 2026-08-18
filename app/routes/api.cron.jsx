@@ -2,11 +2,19 @@
  * Protected Cron Endpoint — /api/cron
  *
  * Runs scheduled jobs: swap window close, onboarding grace expiry, credit expiry.
- * Protected by CRON_SECRET header to prevent unauthorized triggers.
+ * Protected by CRON_SECRET to prevent unauthorized triggers.
  *
- * Vercel Cron (or external schedulers) POST to this endpoint hourly with:
- *   Header: X-Cron-Secret: <CRON_SECRET>
+ * Two trigger contracts are supported so this works regardless of scheduler:
  *
+ *   1. Vercel Cron (native): sends a GET request with the secret as
+ *        Authorization: Bearer <CRON_SECRET>
+ *      This is what vercel.json's cron config produces.
+ *
+ *   2. External schedulers (cron-job.org, Upstash, the admin "Test cron"
+ *      button, etc.): send a GET or POST with
+ *        X-Cron-Secret: <CRON_SECRET>
+ *
+ * Both GET and POST are accepted, and either auth header satisfies the guard.
  * All three jobs are idempotent, so running them hourly is safe.
  */
 import { json } from "@remix-run/node";
@@ -17,15 +25,42 @@ import { logger } from "../lib/error-handling.server.js";
 
 const MODULE = "api.cron";
 
-export async function action({ request }) {
+/**
+ * Validate the request against CRON_SECRET using either supported header:
+ *   - Authorization: Bearer <secret>   (Vercel Cron)
+ *   - X-Cron-Secret: <secret>          (external schedulers / admin test)
+ * Returns true when the secret is configured and one of the headers matches.
+ */
+function isAuthorized(request) {
   const cronSecret = process.env.CRON_SECRET;
-  const providedSecret = request.headers.get("x-cron-secret");
+  if (!cronSecret) return { ok: false, hasEnvSecret: false };
 
-  // Guard: reject if secret is missing or doesn't match
-  if (!cronSecret || providedSecret !== cronSecret) {
+  // Vercel Cron: Authorization: Bearer <CRON_SECRET>
+  const authHeader = request.headers.get("authorization") || "";
+  const bearerMatch = authHeader === `Bearer ${cronSecret}`;
+
+  // External schedulers / admin test button: X-Cron-Secret: <CRON_SECRET>
+  const customHeader = request.headers.get("x-cron-secret");
+  const customMatch = customHeader === cronSecret;
+
+  return {
+    ok: bearerMatch || customMatch,
+    hasEnvSecret: true,
+    bearerMatch,
+    customMatch,
+  };
+}
+
+async function runCronJobs(request) {
+  const auth = isAuthorized(request);
+
+  // Guard: reject if secret is missing or neither header matches
+  if (!auth.ok) {
     logger.warn(MODULE, "Unauthorized cron attempt", {
-      hasEnvSecret: !!cronSecret,
-      providedMatches: providedSecret === cronSecret,
+      hasEnvSecret: auth.hasEnvSecret,
+      bearerMatch: !!auth.bearerMatch,
+      customMatch: !!auth.customMatch,
+      method: request.method,
     });
     return json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -34,7 +69,10 @@ export async function action({ request }) {
   const results = {};
 
   try {
-    logger.info(MODULE, "Starting scheduled jobs", { timestamp: now.toISOString() });
+    logger.info(MODULE, "Starting scheduled jobs", {
+      timestamp: now.toISOString(),
+      method: request.method,
+    });
 
     // Job 1: Swap window close (auto-finalize held shipments past their window)
     try {
@@ -85,7 +123,12 @@ export async function action({ request }) {
   }
 }
 
-// Cron endpoint should only accept POST (from Vercel Cron or external scheduler)
-export async function loader() {
-  return json({ error: "Method not allowed. Use POST." }, { status: 405 });
+// Vercel Cron triggers with a GET request.
+export async function loader({ request }) {
+  return runCronJobs(request);
+}
+
+// External schedulers / admin test button POST to this endpoint.
+export async function action({ request }) {
+  return runCronJobs(request);
 }
