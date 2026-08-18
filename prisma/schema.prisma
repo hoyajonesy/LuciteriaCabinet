@@ -108,6 +108,9 @@ model User {
   subscriptionOnboardings SubscriptionOnboarding[]
   ownershipRejections     OwnershipRejection[]
 
+  // ─── Staff password reset tokens (admin forgot-password flow) ───
+  staffPasswordResetTokens StaffPasswordResetToken[]
+
   @@index([email])
   @@index([wishlistToken])
   @@index([onboardingToken])
@@ -1213,6 +1216,23 @@ model OwnershipRejection {
   @@index([userId, ownableUnitId])
   @@index([supersededAt])
   @@index([sourceSubscriptionContractId])
+}
+
+// ─── StaffPasswordResetToken ────────────────────────────────
+// Single-use, time-limited tokens for the staff/admin forgot-password flow.
+// Distinct from the consumer resetToken fields on User so the two auth
+// surfaces never share reset state.
+model StaffPasswordResetToken {
+  id        String    @id @default(cuid())
+  token     String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([token])
 }
 
 // ─── BillingEvent ───────────────────────────────────────────

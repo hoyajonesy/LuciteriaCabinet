@@ -22,6 +22,7 @@ const CUSTOMER_NAV = [
 const ADMIN_NAV = [
   { label: "Overview", path: "/app/admin", icon: "fa-chart-line", exact: true },
   { label: "Users", path: "/app/admin/users", icon: "fa-users" },
+  { label: "Staff", path: "/app/admin/staff", icon: "fa-user-shield" },
   { label: "Demand", path: "/app/admin/demand", icon: "fa-fire" },
   { label: "Analytics", path: "/app/admin/analytics", icon: "fa-chart-simple" },
   { label: "Operations", path: "/app/admin/operations", icon: "fa-gear" },

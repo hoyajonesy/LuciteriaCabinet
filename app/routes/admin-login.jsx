@@ -8,7 +8,7 @@
  * reach the admin panel.
  */
 import { json, redirect } from "@remix-run/node";
-import { useActionData, Form, useNavigation } from "@remix-run/react";
+import { useActionData, Form, useNavigation, Link } from "@remix-run/react";
 import {
   authenticateStaff,
   createStaffSession,
@@ -98,6 +98,12 @@ export default function StaffLogin() {
           >
             {isSubmitting ? "Signing in..." : "Sign In"}
           </button>
+
+          <div style={styles.forgotWrap}>
+            <Link to="/admin-forgot-password" style={styles.forgotLink}>
+              Forgot your password?
+            </Link>
+          </div>
         </Form>
 
         <div style={styles.footer}>
@@ -203,6 +209,8 @@ const styles = {
     color: "#991b1b",
     marginBottom: 16,
   },
+  forgotWrap: { textAlign: "center", marginTop: 14 },
+  forgotLink: { fontSize: 12, color: "#6b7280", textDecoration: "none" },
   footer: { padding: "0 32px 28px" },
   infoBox: {
     display: "flex",
