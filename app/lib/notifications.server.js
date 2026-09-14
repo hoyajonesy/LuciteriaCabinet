@@ -45,6 +45,58 @@ if (process.env.RESEND_API_KEY) {
 }
 
 /**
+ * FR-6: Pure renderer for watchlist stock-alert email bodies.
+ *
+ * Kept as a standalone, side-effect-free function so the body can be rendered
+ * (and unit-tested) independently of whether SMTP is configured. It reads the
+ * SAME `data.displayLabel` that sendWatchlistStockEmail used to build the
+ * subject line, guaranteeing subject and body always name the same element.
+ */
+function renderWatchlistStockBody(template, data = {}) {
+  const userName = data.customerName || 'Collector';
+  const headline = data.displayLabel || data.productTitle || data.elementName || 'a wishlist item';
+  const link = data.linkUrl || '/app/cabinet/shop';
+
+  if (template === 'watchlist_back_in_stock') {
+    const qty = data.inventoryQty || 0;
+    return `Hi ${userName},
+
+Good news! An element on your wishlist is back in stock:
+
+🔔 ${headline}
+
+There ${qty === 1 ? 'is' : 'are'} currently ${qty} in stock. Popular elements can sell out quickly, so don't wait too long.
+
+👉 View it in the shop: ${link}
+
+Happy Collecting,
+The Luciteria Team
+
+---
+
+This is an automated watchlist stock alert from your Luciteria Collector Cabinet. Manage these alerts in your notification preferences.`;
+  }
+
+  // watchlist_out_of_stock
+  return `Hi ${userName},
+
+A quick heads-up: an element on your wishlist has just gone out of stock:
+
+⚠️ ${headline}
+
+We'll let you know the moment it's back in stock, so there's nothing you need to do.
+
+👉 View it in the shop: ${link}
+
+Happy Collecting,
+The Luciteria Team
+
+---
+
+This is an automated watchlist stock alert from your Luciteria Collector Cabinet. Manage these alerts in your notification preferences.`;
+}
+
+/**
  * Send an email notification (stub / SMTP)
  * Logs to console, sends via SMTP if configured, and stores in memory
  */
@@ -60,6 +112,13 @@ async function sendEmail({ to, subject, template, data, customerId }) {
     status: "sent",
     sentAt: new Date().toISOString(),
   };
+
+  // FR-6: capture the rendered watchlist body on the log entry up-front,
+  // independent of SMTP config, so the subject/body pairing is always
+  // observable and testable.
+  if (template === 'watchlist_back_in_stock' || template === 'watchlist_out_of_stock') {
+    notification.text = renderWatchlistStockBody(template, data);
+  }
 
   notificationLog.push(notification);
   
@@ -156,51 +215,10 @@ The Luciteria Team
 ---
 
 This is an automated restock alert from your Luciteria Collector Cabinet wishlist.`;
-      } else if (template === 'watchlist_back_in_stock') {
-        const userName = data.customerName || 'Collector';
-        const elementName = data.elementName || data.productTitle || 'a wishlist item';
-        const productTitle = data.productTitle || elementName;
-        const qty = data.inventoryQty || 0;
-        const link = data.linkUrl || '/app/cabinet/shop';
-
-        text = `Hi ${userName},
-
-Good news! An element on your wishlist is back in stock:
-
-🔔 ${productTitle}
-
-There ${qty === 1 ? 'is' : 'are'} currently ${qty} in stock. Popular elements can sell out quickly, so don't wait too long.
-
-👉 View it in the shop: ${link}
-
-Happy Collecting,
-The Luciteria Team
-
----
-
-This is an automated watchlist stock alert from your Luciteria Collector Cabinet. Manage these alerts in your notification preferences.`;
-      } else if (template === 'watchlist_out_of_stock') {
-        const userName = data.customerName || 'Collector';
-        const elementName = data.elementName || data.productTitle || 'a wishlist item';
-        const productTitle = data.productTitle || elementName;
-        const link = data.linkUrl || '/app/cabinet/shop';
-
-        text = `Hi ${userName},
-
-A quick heads-up: an element on your wishlist has just gone out of stock:
-
-⚠️ ${productTitle}
-
-We'll let you know the moment it's back in stock, so there's nothing you need to do.
-
-👉 View it in the shop: ${link}
-
-Happy Collecting,
-The Luciteria Team
-
----
-
-This is an automated watchlist stock alert from your Luciteria Collector Cabinet. Manage these alerts in your notification preferences.`;
+      } else if (template === 'watchlist_back_in_stock' || template === 'watchlist_out_of_stock') {
+        // FR-6: reuse the exact body captured on the notification (rendered
+        // from the same displayLabel the subject used) — never re-derive it.
+        text = notification.text ?? renderWatchlistStockBody(template, data);
       } else if (template === 'forgot_password') {
         const userName = data.customerName || 'Collector';
         const resetLink = data.resetLink || '';
@@ -540,22 +558,49 @@ async function sendWatchlistStockEmail({
     return null;
   }
 
-  const displayName = elementName || productTitle || "your wishlist item";
-  const subject = backInStock
-    ? `Back in stock: ${displayName}`
-    : `${displayName} is now out of stock`;
+  // ─── FR-6: single source of truth per email ──────────────────────────────
+  // Subject and body previously read from DIFFERENT fields (subject from
+  // elementName, body headline from productTitle), so a single email could
+  // name two different elements. We snapshot every value this email needs into
+  // ONE frozen event object and derive a SINGLE `displayLabel` from it. Both
+  // the subject line (below) and the body template (in sendEmail) render from
+  // that same immutable label, so they can never diverge — even when many
+  // watchlist emails for different elements are dispatched concurrently in the
+  // same batch run, each call owns its own frozen snapshot.
+  const event = Object.freeze({
+    backInStock: !!backInStock,
+    elementName: elementName || productTitle || "your wishlist item",
+    elementSymbol: elementSymbol || "",
+    productTitle: productTitle || elementName || "your wishlist item",
+    inventoryQty: inventoryQty ?? 0,
+    linkUrl: linkUrl || "/app/cabinet/shop",
+    customerName: customerName || "Collector",
+  });
+
+  // The one label both subject and body use to name the element.
+  const displayLabel = event.elementSymbol
+    ? `${event.elementName} (${event.elementSymbol})`
+    : event.elementName;
+
+  const subject = event.backInStock
+    ? `Back in stock: ${displayLabel}`
+    : `${displayLabel} is now out of stock`;
 
   return sendEmail({
     to,
     subject,
-    template: backInStock ? "watchlist_back_in_stock" : "watchlist_out_of_stock",
+    template: event.backInStock ? "watchlist_back_in_stock" : "watchlist_out_of_stock",
     data: {
-      customerName: customerName || "Collector",
-      elementName: displayName,
-      elementSymbol: elementSymbol || "",
-      productTitle: productTitle || displayName,
-      inventoryQty: inventoryQty ?? 0,
-      linkUrl: linkUrl || "/app/cabinet/shop",
+      customerName: event.customerName,
+      elementName: event.elementName,
+      elementSymbol: event.elementSymbol,
+      productTitle: event.productTitle,
+      // displayLabel is the authoritative element identity shared with the
+      // subject line; the body template MUST render this, never a re-derived
+      // value, to keep subject and body in lock-step.
+      displayLabel,
+      inventoryQty: event.inventoryQty,
+      linkUrl: event.linkUrl,
     },
     customerId,
   });
@@ -629,6 +674,7 @@ export {
   notifyCollectionMilestone,
   notifyRestockAlert,
   sendWatchlistStockEmail,
+  renderWatchlistStockBody,
   notifyPriceChange,
   notifyAssignmentException,
   getNotificationLog,
