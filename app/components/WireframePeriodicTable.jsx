@@ -13,6 +13,8 @@
  *   showChecks  — if true, owned cells show a green check (log-owned mode)
  *   counts      — { [sym]: number } sample counts; a badge shows when > 1
  *   onCellClick — (element) => void
+ *   unavailableFormatLabel — optional format name; when set, unavailable cells
+ *                 show the tooltip "Currently unavailable in <label>" (FR-2)
  *   className   — optional CSS class to apply to the container
  */
 
@@ -30,6 +32,7 @@ export default function WireframePeriodicTable({
   showChecks = false,
   counts = {},
   onCellClick,
+  unavailableFormatLabel = null,
   className = "",
 }) {
   const renderCell = (el) => {
@@ -57,9 +60,13 @@ export default function WireframePeriodicTable({
           ...(isUnavailable ? { opacity: 0.35, cursor: "not-allowed" } : {}),
           transition: "transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s",
         }}
-        onClick={onCellClick ? () => onCellClick(el) : undefined}
+        onClick={
+          onCellClick && !isUnavailable ? () => onCellClick(el) : undefined
+        }
         title={isUnavailable
-          ? `${el.z}. ${el.name} (${el.sym}) — not available in this format`
+          ? (unavailableFormatLabel
+              ? `Currently unavailable in ${unavailableFormatLabel}`
+              : `${el.z}. ${el.name} (${el.sym}) — not available in this format`)
           : `${el.z}. ${el.name} (${el.sym})`
         }
       >

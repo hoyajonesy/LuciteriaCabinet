@@ -6,7 +6,7 @@ import WireframePeriodicTable from "../components/WireframePeriodicTable";
 
 import { ELEMENTS_118 } from "../data/elements.server";
 import { FORMAT_LIST } from "../lib/formats";
-import { elementsForDisplayFormat, productUrlForShopProduct } from "../lib/format-display";
+import { elementsWithAvailabilityForFormat, productUrlForShopProduct } from "../lib/format-display";
 import { getUserId } from "../lib/session.server";
 import { getUserById } from "../lib/auth.server";
 import { getCollectionStats } from "../lib/collection.server";
@@ -30,7 +30,11 @@ export const loader = async ({ request }) => {
   const elementsByFormat = {};
   const linksByFormat = {};
   for (const f of FORMAT_LIST) {
-    const formattedElements = elementsForDisplayFormat(ELEMENTS_118, f.id).map((e) => ({
+    // FR-2: keep EVERY element (so the table renders all cells) but carry a
+    // dynamically computed `available` flag for the selected format. Elements
+    // without a purchasable product in this format come back with
+    // available:false and product:null, and are rendered disabled downstream.
+    const formattedElements = elementsWithAvailabilityForFormat(ELEMENTS_118, f.id).map((e) => ({
       z: e.z,
       sym: e.sym,
       name: e.name,
@@ -44,7 +48,10 @@ export const loader = async ({ request }) => {
 
     elementsByFormat[f.id] = formattedElements;
     linksByFormat[f.id] = {};
+    // Only build shop links for elements actually available in this format —
+    // unavailable cells are not clickable, so we never emit a mismatched link.
     for (const el of formattedElements) {
+      if (!el.available || !el.product) continue;
       linksByFormat[f.id][el.sym] = {
         url: productUrlForShopProduct(el.product, el.elementName),
         title: el.product?.title || el.elementName,
@@ -78,6 +85,8 @@ export default function ShopPage() {
   const selectedFormat = format && format !== "" ? format : "other";
   const elements = elementsByFormat[selectedFormat] || elementsByFormat.other || [];
   const links = linksByFormat[selectedFormat] || linksByFormat.other || {};
+  const selectedFormatName =
+    formats.find((f) => f.id === selectedFormat)?.name || "this format";
 
   const tableStates = useMemo(() => {
     return { ...collectionStates };
@@ -192,6 +201,7 @@ export default function ShopPage() {
               elements={elements}
               states={tableStates}
               onCellClick={handleCellClick}
+              unavailableFormatLabel={selectedFormatName}
             />
           </div>
         </section>

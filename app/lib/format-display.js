@@ -74,3 +74,33 @@ export function elementsForDisplayFormat(elements, formatId) {
     .map((element) => elementForDisplayFormat(element, formatId))
     .filter(Boolean);
 }
+
+/**
+ * FR-2 — availability-aware variant for the cabinet shop periodic table.
+ *
+ * Unlike elementForDisplayFormat (which returns null for elements not offered
+ * in the format so list views can drop them), this ALWAYS returns the element
+ * so the periodic table can still render its cell, but with a dynamically
+ * computed `available` flag and `product` (null when the element has no
+ * purchasable product in the selected format). Callers grey out / disable
+ * cells where `available === false` instead of silently hiding them.
+ */
+export function elementWithAvailabilityForFormat(element, formatId) {
+  const mixed = isMixedFormat(formatId);
+  const product = productForDisplayFormat(element, formatId);
+  const available = mixed || (sizesIncludeFormat(element, formatId) && !!product);
+
+  return {
+    ...element,
+    // Keep the clean canonical element name for unavailable cells; only swap in
+    // the product title when there is an actual product for this format.
+    name: available && product?.title ? product.title : (element.elementName || element.name),
+    elementName: element.elementName || element.name,
+    product: available ? product : null,
+    available,
+  };
+}
+
+export function elementsWithAvailabilityForFormat(elements, formatId) {
+  return elements.map((element) => elementWithAvailabilityForFormat(element, formatId));
+}

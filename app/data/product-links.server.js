@@ -4,10 +4,19 @@
  * Loads data/products.csv (the Luciteria Shopify product export) once at startup
  * and builds a map of element-symbol → product URL for each of the 5 formats.
  *
- * Detection strategy (most reliable first):
- *   1. Variant SKU prefix = element symbol, suffix = format
- *        e.g. "Sr2x2" → Strontium, lucite ; "Os10mm" → Osmium, 10mm
- *   2. Title prefix matched against the 118 element names (fallback)
+ * Element detection strategy (most reliable first — FR-1):
+ *   1. Product TITLE matched against the canonical element catalogue as a
+ *      whole word (e.g. "Palladium 50mm Lucite Cube" → Pd, "Violet Phosphorus
+ *      Cube" → P). Title is the most reliable signal and is evaluated BEFORE
+ *      any SKU string.
+ *   2. Explicit metadata tag "element:P" (word-boundary, exact symbol lookup),
+ *      when a Tags column is present in the export.
+ *   3. SKU prefix = element symbol, matched by EXACT atomic-symbol lookup
+ *      (2-letter then 1-letter), used only as a last resort.
+ *
+ * Evaluating the SKU last prevents prefix collisions from routing an element to
+ * the wrong one — e.g. a Phosphorus product whose SKU begins "PB..." must never
+ * resolve to Lead (Pb), and "Custom_Re_ring" must not resolve to Cu.
  *
  * Format suffix → app format id:
  *   _amp                 → ampoules
@@ -24,6 +33,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { ELEMENTS_118 } from './elements.server.js';
+import { resolveCanonicalElement } from './periodic-canonical.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CSV_PATH = path.resolve(__dirname, '../../data/products.csv');
@@ -32,10 +42,6 @@ const FORMAT_IDS = ['10mm', '25.4mm', '50mm', 'lucite', 'ampoules'];
 
 // ─── Lookups ──────────────────────────────────────────────────
 const SYMBOLS = new Set(ELEMENTS_118.map((e) => e.sym));
-// Element names sorted longest-first so "Carbon dioxide" never shadows "Carbon"
-const NAME_TO_SYM = ELEMENTS_118
-  .map((e) => ({ name: e.name.toLowerCase(), sym: e.sym }))
-  .sort((a, b) => b.name.length - a.name.length);
 const SYM_TO_NAME = Object.fromEntries(ELEMENTS_118.map((e) => [e.sym, e.name]));
 
 // ─── Robust CSV parser (handles quoted fields w/ embedded newlines) ──
@@ -127,14 +133,24 @@ function detectSymbolFromSku(sku) {
   return null;
 }
 
+// Title-first canonical match (FR-1): resolve the product title against the
+// canonical element catalogue using WHOLE-WORD element-name matching (with a
+// single-distinct-match guard). Because this matches element NAMES — not raw
+// symbol substrings — it can never confuse P (Phosphorus) with Pb/Pt/Pd/etc.
 function detectSymbolFromTitle(title) {
-  const t = (title || '').toLowerCase().trim();
-  for (const { name, sym } of NAME_TO_SYM) {
-    if (t === name || t.startsWith(name + ' ') || t.startsWith(name + ',')) {
-      return sym;
-    }
-  }
-  return null;
+  const canonical = resolveCanonicalElement(null, title);
+  return canonical ? canonical.sym : null;
+}
+
+// Explicit metadata tag "element:P" (word-boundary, exact atomic-symbol lookup).
+// Only relevant when the Shopify export includes a Tags column. Falls back to
+// null (never guesses) when no valid element tag is present.
+function detectSymbolFromTag(tags) {
+  if (!tags) return null;
+  const m = String(tags).match(/(?:^|[,;\s])element:([A-Za-z]{1,3})\b/i);
+  if (!m) return null;
+  const proper = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
+  return SYMBOLS.has(proper) ? proper : null;
 }
 
 // ─── Build the link map once ──────────────────────────────────
@@ -168,6 +184,7 @@ function build() {
   const iQty = idx('Variant Inventory Qty');
   const iStatus = idx('Status');
   const iVariantId = idx('Variant ID');
+  const iTags = idx('Tags'); // optional; -1 when the export has no Tags column
 
   for (let r = 1; r < rows.length; r++) {
     const cols = rows[r];
@@ -178,7 +195,14 @@ function build() {
     if (!url) continue;
     if (isAccessory(title, sku)) continue;
 
-    const sym = detectSymbolFromSku(sku) || detectSymbolFromTitle(title);
+    const tags = iTags !== -1 ? (cols[iTags] || '') : '';
+    // FR-1: title (canonical, whole-word) → explicit element tag → SKU prefix.
+    // SKU is the LAST resort so overlapping prefixes (PB→Pb, Custom→Cu, SQ…→S)
+    // can never override the element named in the product title.
+    const sym =
+      detectSymbolFromTitle(title) ||
+      detectSymbolFromTag(tags) ||
+      detectSymbolFromSku(sku);
     if (!sym) continue;
     const fmt = detectFormatFromSku(sku) || detectFormatFromTitle(title);
     if (!fmt) continue;
