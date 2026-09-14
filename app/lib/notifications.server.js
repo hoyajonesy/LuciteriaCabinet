@@ -19,6 +19,7 @@
  */
 
 import nodemailer from 'nodemailer';
+import { resolveCanonicalElement } from '../data/periodic-canonical.js';
 
 // In-memory notification log (replaced by DB in production)
 const notificationLog = [];
@@ -567,11 +568,22 @@ async function sendWatchlistStockEmail({
   // that same immutable label, so they can never diverge — even when many
   // watchlist emails for different elements are dispatched concurrently in the
   // same batch run, each call owns its own frozen snapshot.
+  //
+  // FR-6 (robustness): Rather than trust elementName outright (which may be
+  // stale/wrong — the same data problem FR-1 fixed in the shop), resolve the
+  // canonical element from productTitle via resolveCanonicalElement (the same
+  // title-first logic product-links.server.js uses). If resolution succeeds,
+  // the canonical name and symbol drive displayLabel; if it fails (e.g.,
+  // productTitle is generic), fall back to the passed elementName/Symbol.
+  const canonical = resolveCanonicalElement(null, productTitle || "");
+  const canonicalName = canonical?.name || elementName || productTitle || "your wishlist item";
+  const canonicalSymbol = canonical?.sym || elementSymbol || "";
+
   const event = Object.freeze({
     backInStock: !!backInStock,
-    elementName: elementName || productTitle || "your wishlist item",
-    elementSymbol: elementSymbol || "",
-    productTitle: productTitle || elementName || "your wishlist item",
+    elementName: canonicalName,
+    elementSymbol: canonicalSymbol,
+    productTitle: productTitle || canonicalName || "your wishlist item",
     inventoryQty: inventoryQty ?? 0,
     linkUrl: linkUrl || "/app/cabinet/shop",
     customerName: customerName || "Collector",

@@ -135,3 +135,28 @@ test("out-of-stock body renders the out-of-stock copy from displayLabel", () => 
   assert.match(body, /gone out of stock/);
   assert.match(body, /Polonium \(Po\)/);
 });
+
+test("FR-6 robustness: displayLabel derived via canonical resolution from productTitle, not from stale elementName", async () => {
+  // Simulates the root data problem FR-1 fixed: the DB has elementName="Lead"
+  // but productTitle="Phosphorus 10mm Cube". Before FR-6 robustness, the email
+  // would trust elementName and say "Lead (Pb)". With canonical resolution, it
+  // correctly resolves to Phosphorus from the title (same logic as the shop).
+  const to = "canonical@example.com";
+  await sendWatchlistStockEmail({
+    to,
+    backInStock: true,
+    elementName: "Lead", // WRONG (stale/corrupted DB value)
+    elementSymbol: "Pb", // WRONG
+    productTitle: "Phosphorus 10mm Cube", // CORRECT (the source of truth)
+    inventoryQty: 2,
+    customerName: "Dmitri",
+  });
+
+  const email = latestEmailTo(to);
+  // Subject and body must both name Phosphorus (resolved from title), never Lead.
+  assert.match(email.subject, /Phosphorus \(P\)/);
+  assert.match(email.text, /Phosphorus \(P\)/);
+  assert.doesNotMatch(email.subject, /Lead|Pb/);
+  assert.doesNotMatch(email.text, /Lead|Pb/);
+  assert.strictEqual(email.data.displayLabel, "Phosphorus (P)");
+});
