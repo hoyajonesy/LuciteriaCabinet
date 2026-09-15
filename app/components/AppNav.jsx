@@ -16,7 +16,8 @@ const CUSTOMER_NAV = [
   { label: "Wishlist", path: "/app/cabinet/wishlist", icon: "fa-heart" },
   { label: "My Passport", path: "/app/cabinet/passport", icon: "fa-id-card" },
   { label: "Shop", path: "/app/cabinet/shop", icon: "fa-cart-shopping" },
-  { label: "Subscription", path: "/app/cabinet/subscription", icon: "fa-repeat" },
+  // Subscription tab hidden — offering not yet live.
+  // { label: "Subscription", path: "/app/cabinet/subscription", icon: "fa-repeat" },
   { label: "Notifications", path: "/app/cabinet/notifications", icon: "fa-bell", badgeKey: "unread" },
 ];
 
