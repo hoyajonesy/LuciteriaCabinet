@@ -142,6 +142,38 @@ export async function action({ request }) {
   return json({ error: "Unknown action." }, { status: 400 });
 }
 
+/**
+ * Password input with an inline show/hide (eye) toggle. Keeps the same
+ * name/required/minLength contract as a plain <input> so the form actions
+ * are unchanged; only the on-screen masking is toggled locally.
+ */
+function PasswordField({ name, placeholder, minLength, autoComplete, inputStyle }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span style={styles.pwWrap}>
+      <input
+        type={show ? "text" : "password"}
+        name={name}
+        placeholder={placeholder}
+        minLength={minLength}
+        required
+        autoComplete={autoComplete}
+        style={{ ...inputStyle, paddingRight: 34, width: "100%", boxSizing: "border-box" }}
+      />
+      <button
+        type="button"
+        onClick={() => setShow((s) => !s)}
+        style={styles.pwToggle}
+        aria-label={show ? "Hide password" : "Show password"}
+        title={show ? "Hide password" : "Show password"}
+        tabIndex={-1}
+      >
+        {show ? "🙈" : "👁️"}
+      </button>
+    </span>
+  );
+}
+
 function fullName(u) {
   const n = `${u.firstName || ""} ${u.lastName || ""}`.trim();
   return n || "—";
@@ -274,23 +306,19 @@ export default function StaffAdmin() {
                           <input type="hidden" name="intent" value="reset-password" />
                           <input type="hidden" name="userId" value={u.id} />
                           <span style={styles.resetLabel}>New password for {u.email}:</span>
-                          <input
-                            type="password"
+                          <PasswordField
                             name="newPassword"
                             placeholder="New password"
                             minLength={MIN_PASSWORD_LENGTH}
-                            required
-                            style={styles.inlineInput}
                             autoComplete="new-password"
+                            inputStyle={styles.inlineInput}
                           />
-                          <input
-                            type="password"
+                          <PasswordField
                             name="confirmPassword"
                             placeholder="Confirm password"
                             minLength={MIN_PASSWORD_LENGTH}
-                            required
-                            style={styles.inlineInput}
                             autoComplete="new-password"
+                            inputStyle={styles.inlineInput}
                           />
                           <button type="submit" style={styles.primaryBtn} disabled={isSubmitting}>
                             Save Password
@@ -332,11 +360,11 @@ export default function StaffAdmin() {
           <div style={styles.formRow}>
             <div style={styles.field}>
               <label style={styles.label}>Password</label>
-              <input type="password" name="password" placeholder="At least 8 characters" minLength={MIN_PASSWORD_LENGTH} required style={styles.input} autoComplete="new-password" />
+              <PasswordField name="password" placeholder="At least 8 characters" minLength={MIN_PASSWORD_LENGTH} autoComplete="new-password" inputStyle={styles.input} />
             </div>
             <div style={styles.field}>
               <label style={styles.label}>Confirm Password</label>
-              <input type="password" name="confirmPassword" placeholder="Re-enter password" minLength={MIN_PASSWORD_LENGTH} required style={styles.input} autoComplete="new-password" />
+              <PasswordField name="confirmPassword" placeholder="Re-enter password" minLength={MIN_PASSWORD_LENGTH} autoComplete="new-password" inputStyle={styles.input} />
             </div>
           </div>
           <button type="submit" style={{ ...styles.primaryBtn, marginTop: 4 }} disabled={isSubmitting}>
@@ -390,6 +418,19 @@ const styles = {
   resetRow: { background: "#f9fafb" },
   resetForm: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
   resetLabel: { fontSize: 12, color: "#374151", fontWeight: 500 },
+  pwWrap: { position: "relative", display: "inline-flex", alignItems: "center", flex: 1 },
+  pwToggle: {
+    position: "absolute",
+    right: 6,
+    top: "50%",
+    transform: "translateY(-50%)",
+    background: "transparent",
+    border: "none",
+    cursor: "pointer",
+    fontSize: 14,
+    lineHeight: 1,
+    padding: 2,
+  },
   inlineInput: {
     padding: "7px 10px",
     fontSize: 13,

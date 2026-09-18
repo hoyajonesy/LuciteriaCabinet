@@ -9,6 +9,7 @@
  */
 import { json, redirect } from "@remix-run/node";
 import { useActionData, Form, useNavigation, Link } from "@remix-run/react";
+import { useState } from "react";
 import {
   authenticateStaff,
   createStaffSession,
@@ -42,6 +43,7 @@ export default function StaffLogin() {
   const actionData = useActionData();
   const navigation = useNavigation();
   const isSubmitting = navigation.state === "submitting";
+  const [showPassword, setShowPassword] = useState(false);
 
   return (
     <div style={styles.page}>
@@ -82,13 +84,23 @@ export default function StaffLogin() {
           <div style={styles.inputWrap}>
             <span style={styles.inputIcon}>🔒</span>
             <input
-              type="password"
+              type={showPassword ? "text" : "password"}
               name="password"
               placeholder="••••••••••"
               required
               style={styles.input}
               autoComplete="current-password"
             />
+            <button
+              type="button"
+              onClick={() => setShowPassword((s) => !s)}
+              style={styles.revealBtn}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              title={showPassword ? "Hide password" : "Show password"}
+              tabIndex={-1}
+            >
+              {showPassword ? "🙈" : "👁️"}
+            </button>
           </div>
 
           <button
@@ -176,6 +188,15 @@ const styles = {
     marginBottom: 16,
   },
   inputIcon: { padding: "0 12px", fontSize: 14, color: "#9ca3af" },
+  revealBtn: {
+    background: "transparent",
+    border: "none",
+    cursor: "pointer",
+    fontSize: 15,
+    padding: "0 12px",
+    lineHeight: 1,
+    color: "#6b7280",
+  },
   input: {
     flex: 1,
     padding: "10px 12px 10px 0",
