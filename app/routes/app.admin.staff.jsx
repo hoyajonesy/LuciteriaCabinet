@@ -11,7 +11,7 @@
  */
 import { json } from "@remix-run/node";
 import { useLoaderData, useActionData, useNavigation, Form } from "@remix-run/react";
-import { useState, Fragment } from "react";
+import { useState, useEffect, useRef, Fragment } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { prisma } from "../lib/db.server.js";
 import { requireAdmin } from "../lib/admin.server.js";
@@ -91,7 +91,7 @@ export async function action({ request }) {
       return json({ intent, error: err.message || "Failed to create staff account." }, { status: 400 });
     }
 
-    return json({ intent, success: `Staff account created for ${email}.` });
+    return json({ intent, success: `Staff account created for ${email}. They can sign in at /admin-login with the password you just set.` });
   }
 
   // ─── Revoke staff access ───────────────────────────────────
@@ -136,7 +136,7 @@ export async function action({ request }) {
 
     const passwordHash = await hashPassword(newPassword);
     await prisma.user.update({ where: { id: userId }, data: { passwordHash } });
-    return json({ intent, success: `Password reset for ${target.email}.` });
+    return json({ intent, success: `Password updated for ${target.email}. They can now sign in at /admin-login with the new password.` });
   }
 
   return json({ error: "Unknown action." }, { status: 400 });
@@ -163,9 +163,33 @@ export default function StaffAdmin() {
   const isSubmitting = navigation.state === "submitting";
 
   // Which row's inline reset-password form is expanded.
+  // On an error, keep/reopen the row that failed (also works for the initial
+  // SSR render after a no-JS submit). On success we close it via the effect
+  // below so the form does not "stay stuck" with the old values still shown.
   const [resetOpenId, setResetOpenId] = useState(
     actionData?.intent === "reset-password" && actionData?.error ? actionData.resetUserId : null,
   );
+
+  const addFormRef = useRef(null);
+
+  // React to the latest action result:
+  //  - a successful password reset → collapse the inline form (unmounting it
+  //    clears the typed password fields), so it no longer stays open after save;
+  //  - a failed password reset → make sure the failing row is expanded so the
+  //    admin sees the error next to the inputs;
+  //  - a successful staff creation → clear the "Add Staff" form.
+  useEffect(() => {
+    if (actionData?.intent === "reset-password") {
+      if (actionData.success) {
+        setResetOpenId(null);
+      } else if (actionData.error && actionData.resetUserId) {
+        setResetOpenId(actionData.resetUserId);
+      }
+    }
+    if (actionData?.intent === "add-staff" && actionData.success) {
+      addFormRef.current?.reset();
+    }
+  }, [actionData]);
 
   return (
     <div>
@@ -293,7 +317,7 @@ export default function StaffAdmin() {
       <div style={{ ...styles.card, marginTop: 24, padding: 20 }}>
         <h3 style={styles.h3}>Add Staff Account</h3>
         <p style={styles.sub}>Creates a new user with admin access. They sign in at <code>/admin-login</code>.</p>
-        <Form method="post" style={styles.addForm}>
+        <Form method="post" style={styles.addForm} ref={addFormRef}>
           <input type="hidden" name="intent" value="add-staff" />
           <div style={styles.formRow}>
             <div style={styles.field}>
