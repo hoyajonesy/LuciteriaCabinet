@@ -136,6 +136,25 @@ export async function loadAssignmentContext(customer) {
     await Promise.all([
       prisma.product.findMany({
         where: { status: "Active" },
+        select: {
+          id: true,
+          sku: true,
+          title: true,
+          elementSymbol: true,
+          elementName: true,
+          atomicNumber: true,
+          category: true,
+          format: true,
+          collectionTypes: true,
+          status: true,
+          inventoryQty: true,
+          priceUsd: true,
+          retailPrice: true,
+          subscriptionCost: true,
+          rarityTier: true,
+          availableForSubscription: true,
+          shopifyVariantId: true,
+        },
       }),
       prisma.collectionRecord.findMany({
         where: { customerId: customer.id },

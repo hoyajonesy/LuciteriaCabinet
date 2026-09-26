@@ -20,7 +20,7 @@ import {
   completeOnboarding,
   ONBOARDING_STATUS,
 } from "../lib/subscription-onboarding.server.js";
-import { ELEMENTS_118 } from "../data/elements.server.js";
+import { getElements118 } from "../data/elements.server.js";
 import { normaliseFormat, formatLabel } from "../lib/formats.js";
 import { ElementPickerGrid } from "../components/ElementPickerModal";
 // NOTE: WireframePeriodicTable was the original onboarding picker. Per FR-11 the
@@ -70,6 +70,7 @@ export const loader = async ({ request, params }) => {
 
   const suggestedSymbols = suggestions.map((s) => s.elementSymbol);
 
+  const ELEMENTS_118 = await getElements118();
   const elements = ELEMENTS_118.map((e) => ({
     z: e.z, sym: e.sym, name: e.name,
     row: e.row, col: e.col, group: e.group, phase: e.phase,

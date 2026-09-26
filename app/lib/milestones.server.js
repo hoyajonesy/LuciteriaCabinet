@@ -6,7 +6,7 @@
  */
 
 import { prisma } from './db.server.js';
-import { ELEMENTS_118 } from '../data/elements.server.js';
+import { getElements118 } from '../data/elements.server.js';
 import { getGroupKey, PERIODIC_GROUPS, getElementsByGroup } from './periodic-groups.js';
 
 // ─── Milestone Definitions ──────────────────────────────────────
@@ -47,6 +47,10 @@ const ALL_MILESTONES = [...MILESTONE_DEFS, ...GROUP_MILESTONES];
  * @returns {Array} Newly earned milestones
  */
 export async function checkMilestones(userId) {
+  // Warm the element catalog cache so the synchronous group-milestone
+  // check() closures (which call getElementsByGroup) see live product data.
+  await getElements118();
+
   // Get current owned elements
   const ownedItems = await prisma.collectionItem.findMany({
     where: { userId, state: 'OWNED' },

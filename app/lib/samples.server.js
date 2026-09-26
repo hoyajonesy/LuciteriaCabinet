@@ -12,7 +12,7 @@
  */
 
 import { prisma } from './db.server.js';
-import { ELEMENTS_118 } from '../data/elements.server.js';
+import { getElements118 } from '../data/elements.server.js';
 
 export const CONDITIONS = ['Mint', 'Excellent', 'Good', 'Fair', 'Damaged'];
 export const SAMPLE_FORMATS = ['10mm', '25.4mm', '50mm', 'lucite', 'ampoules'];
@@ -21,6 +21,7 @@ export const SAMPLE_FORMATS = ['10mm', '25.4mm', '50mm', 'lucite', 'ampoules'];
  * Ensure a CollectionItem exists for (user, element). Returns the item.
  */
 async function ensureCollectionItem(userId, elementSymbol, markOwned = false) {
+  const ELEMENTS_118 = await getElements118();
   const element = ELEMENTS_118.find((el) => el.sym === elementSymbol);
   if (!element) throw new Error(`Unknown element: ${elementSymbol}`);
 

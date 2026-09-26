@@ -80,6 +80,20 @@ async function getProducts({ category, format, status, inStock } = {}) {
   
   return prisma.product.findMany({
     where,
+    select: {
+      sku: true,
+      handle: true,
+      title: true,
+      elementSymbol: true,
+      elementName: true,
+      atomicNumber: true,
+      format: true,
+      status: true,
+      inventoryQty: true,
+      priceUsd: true,
+      shopifyProductId: true,
+      shopifyVariantId: true,
+    },
     orderBy: { atomicNumber: "asc" },
   });
 }
@@ -119,6 +133,20 @@ async function getMissingProducts(customerId) {
     where: {
       id: { notIn: ownedIds },
       status: "Active",
+    },
+    select: {
+      sku: true,
+      handle: true,
+      title: true,
+      elementSymbol: true,
+      elementName: true,
+      atomicNumber: true,
+      format: true,
+      status: true,
+      inventoryQty: true,
+      priceUsd: true,
+      shopifyProductId: true,
+      shopifyVariantId: true,
     },
     orderBy: { atomicNumber: "asc" },
   });

@@ -4,7 +4,7 @@ import { useState, useCallback, useMemo } from "react";
 import AppNav from "../components/AppNav";
 import WireframePeriodicTable from "../components/WireframePeriodicTable";
 
-import { ELEMENTS_118 } from "../data/elements.server";
+import { getElements118 } from "../data/elements.server";
 import { FORMAT_LIST } from "../lib/formats";
 import { elementsWithAvailabilityForFormat, productUrlForShopProduct } from "../lib/format-display";
 import { getUserId } from "../lib/session.server";
@@ -27,6 +27,7 @@ export const loader = async ({ request }) => {
   const collectionStates = {};
   for (const sym of stats.ownedSymbols) collectionStates[sym] = "OWNED";
 
+  const ELEMENTS_118 = await getElements118();
   const elementsByFormat = {};
   const linksByFormat = {};
   for (const f of FORMAT_LIST) {

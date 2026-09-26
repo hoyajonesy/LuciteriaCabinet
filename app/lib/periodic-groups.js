@@ -9,7 +9,7 @@
  * pseudo-groups for collection progress purposes.
  */
 
-import { ELEMENTS_118 } from '../data/elements.server.js';
+import { getElements118Sync } from '../data/elements.server.js';
 
 // ─── 18 IUPAC Groups + Lanthanide/Actinide series ─────────────
 export const PERIODIC_GROUPS = {
@@ -52,7 +52,7 @@ export function getGroupKey(element) {
  * Get all elements belonging to a specific group key.
  */
 export function getElementsByGroup(groupKey) {
-  return ELEMENTS_118.filter(el => getGroupKey(el) === groupKey);
+  return getElements118Sync().filter(el => getGroupKey(el) === groupKey);
 }
 
 /**
@@ -60,7 +60,7 @@ export function getElementsByGroup(groupKey) {
  */
 export function getGroupElementMap() {
   const map = {};
-  for (const el of ELEMENTS_118) {
+  for (const el of getElements118Sync()) {
     const key = getGroupKey(el);
     if (!map[key]) map[key] = [];
     map[key].push(el.sym);

@@ -7,7 +7,7 @@
 import { json } from "@remix-run/node";
 import { useLoaderData, Link } from "@remix-run/react";
 import { useState } from "react";
-import { ELEMENTS_118 } from "../data/elements.server";
+import { getElements118 } from "../data/elements.server";
 import { prisma } from "../lib/db.server";
 import { productUrlForShopProduct } from "../lib/format-display";
 
@@ -24,9 +24,14 @@ const getUserByShareSlug = async (shareSlug) => {
         startsWith: idPrefix,
       },
     },
-    include: {
-      wishlistElements: { orderBy: { priority: "asc" } },
-      ownedElements: true,
+    // NT-9: the wishlist/owned relations were never used here — the loader reads
+    // collection items separately — so drop the heavy includes and select only
+    // the scalar fields the slug match and page header need.
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      subscriptionFormat: true,
     },
   });
 
@@ -54,10 +59,28 @@ export const loader = async ({ params }) => {
   const wishlistSymbols = wishlistItems.map(e => e.elementSymbol);
   const ownedSymbols = collectionItems.filter(item => item.state === "OWNED").map(e => e.elementSymbol);
 
-  // Map products to extract handle and variant ID
-  const allProducts = await prisma.product.findMany();
-  const productMap = new Map(allProducts.map(p => [p.sku, p]));
+  const ELEMENTS_118 = await getElements118();
   const preferredFormat = user.subscriptionFormat || "lucite_cube";
+
+  // NT-9: only fetch the Product rows this wishlist actually references
+  // (instead of the whole catalog) to look up fresh handle / variant IDs.
+  const neededSkus = new Set();
+  for (const it of wishlistItems) {
+    const el = ELEMENTS_118.find((e) => e.sym === it.elementSymbol);
+    if (!el) continue;
+    const variant =
+      (it.format && el.productsByFormat?.[it.format]) ||
+      (preferredFormat && el.productsByFormat?.[preferredFormat]) ||
+      (el.products && el.products.length > 0 ? el.products[0] : null);
+    if (variant?.sku) neededSkus.add(variant.sku);
+  }
+  const allProducts = neededSkus.size
+    ? await prisma.product.findMany({
+        where: { sku: { in: Array.from(neededSkus) } },
+        select: { sku: true, handle: true, shopifyVariantId: true },
+      })
+    : [];
+  const productMap = new Map(allProducts.map(p => [p.sku, p]));
 
   const wishlistElementsResolved = wishlistItems.map((it) => {
     const el = ELEMENTS_118.find((e) => e.sym === it.elementSymbol);
@@ -85,11 +108,19 @@ export const loader = async ({ params }) => {
     };
   });
 
-  return json({
-    userName: `${user.firstName} ${user.lastName}`,
-    wishlistElements: wishlistElementsResolved,
-    ownedCount: ownedSymbols.length,
-  });
+  return json(
+    {
+      userName: `${user.firstName} ${user.lastName}`,
+      wishlistElements: wishlistElementsResolved,
+      ownedCount: ownedSymbols.length,
+    },
+    {
+      // NT-11: let Vercel's CDN serve repeat views of a shared link.
+      headers: {
+        "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600",
+      },
+    }
+  );
 };
 
 export default function PublicWishlistBySlug() {

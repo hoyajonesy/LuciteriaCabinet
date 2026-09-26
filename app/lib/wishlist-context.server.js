@@ -10,7 +10,7 @@
  */
 
 import { prisma } from './db.server.js';
-import { ELEMENTS_118, isPreciousMetal } from '../data/elements.server.js';
+import { getElements118Sync, isPreciousMetal } from '../data/elements.server.js';
 
 export const CONTEXT_LABELS = {
   CORE: { label: 'Core', color: '#1976D2', description: 'Foundational gaps to fill first' },
@@ -29,7 +29,7 @@ export const CONTEXT_LABELS = {
 export function detectWishlistContext(elementSymbol, ctx = {}) {
   const { ownedSymbols = [], completionPct = 0 } = ctx;
   const ownedSet = new Set(ownedSymbols);
-  const element = ELEMENTS_118.find((el) => el.sym === elementSymbol);
+  const element = getElements118Sync().find((el) => el.sym === elementSymbol);
 
   // Upgrade target: already owns this element (e.g. different format)
   if (ownedSet.has(elementSymbol)) {

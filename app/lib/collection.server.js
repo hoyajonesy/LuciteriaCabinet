@@ -7,7 +7,7 @@
  */
 
 import { prisma } from './db.server.js';
-import { ELEMENTS_118 } from '../data/elements.server.js';
+import { getElements118 } from '../data/elements.server.js';
 import { getGroupKey, getAllGroupProgress, PERIODIC_GROUPS } from './periodic-groups.js';
 import { getAvailableElementsForFormat, FORMAT_LIST, getCollectibleCap } from './formats.server.js';
 import { detectWishlistContext } from './wishlist-context.server.js';
@@ -42,6 +42,7 @@ export async function getUserCollectionByState(userId, state) {
  * Update or create a collection item state for an element.
  */
 export async function updateCollectionState(userId, elementSymbol, newState, extras = {}) {
+  const ELEMENTS_118 = await getElements118();
   const element = ELEMENTS_118.find(el => el.sym === elementSymbol);
   if (!element) throw new Error(`Unknown element: ${elementSymbol}`);
   if (!COLLECTION_STATES.includes(newState)) throw new Error(`Invalid state: ${newState}`);
@@ -123,6 +124,7 @@ export async function bulkSetOwned(userId, symbols, format = null) {
  * Get comprehensive collection statistics for a user.
  */
 export async function getCollectionStats(userId, format = 'lucite_cube') {
+  const ELEMENTS_118 = await getElements118();
   const items = await getUserCollection(userId);
   const stateMap = { OWNED: [], WANTED: [], WATCHLIST: [], MISSING: [] };
 
@@ -223,6 +225,7 @@ export async function getClosestToCompletion(userId, limit = 5) {
  * Algorithm: Pick the element that completes the most near-complete groups.
  */
 export async function getNextBestRecommendation(userId) {
+  const ELEMENTS_118 = await getElements118();
   const stats = await getCollectionStats(userId);
   const ownedSet = new Set(stats.ownedSymbols);
   const groupProgress = await getProgressByGroup(userId);
@@ -283,6 +286,7 @@ const EXPENSIVE = new Set(['Re', 'Rh', 'Au', 'Os', 'Ru', 'Pd', 'Ir', 'Pt']);
  * @returns {Array<{ element, score, reason, priority }>}
  */
 export async function getNextBestRecommendations(userId, limit = 3, format = 'lucite_cube') {
+  const ELEMENTS_118 = await getElements118();
   const stats = await getCollectionStats(userId, format);
   const ownedSet = new Set(stats.ownedSymbols);
   const wantedSet = new Set(stats.wantedSymbols);
@@ -355,6 +359,7 @@ export async function getNextBestRecommendations(userId, limit = 3, format = 'lu
  * Get missing elements available for purchase (for shop view).
  */
 export async function getMissingItemsForShop(userId) {
+  const ELEMENTS_118 = await getElements118();
   const stats = await getCollectionStats(userId);
   const missingElements = ELEMENTS_118.filter(el => stats.missingSymbols.includes(el.sym));
 

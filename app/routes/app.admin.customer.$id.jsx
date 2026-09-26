@@ -15,7 +15,7 @@ import PeriodicTable from "../components/PeriodicTable";
 
 import * as db from "../data/mock-db.server";
 import { getBillingSummary } from "../lib/billing.server.js";
-import { ELEMENTS_118, isAvailableForCollection, isPreciousMetal } from "../data/elements.server";
+import { getElements118, isAvailableForCollection, isPreciousMetal } from "../data/elements.server";
 import { requireAdmin } from "../lib/admin.server.js";
 
 export const loader = async ({ request, params }) => {
@@ -40,6 +40,7 @@ export const loader = async ({ request, params }) => {
   const wishlistSymbols = wishlist.map(w => w.product.elementSymbol);
 
   // Serialize elements for periodic table
+  const ELEMENTS_118 = await getElements118();
   const elements = ELEMENTS_118.map(e => ({
     z: e.z, sym: e.sym, name: e.name,
     row: e.row, col: e.col, group: e.group, phase: e.phase,

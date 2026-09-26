@@ -18,7 +18,7 @@ import {
 import { prisma } from "../lib/db.server.js";
 import { unpublishPassport } from "../lib/passport.server.js";
 import { markOnboardingCompleteByAdmin } from "../lib/subscription-onboarding.server.js";
-import { ELEMENTS_118 } from "../data/elements.server.js";
+import { getElements118 } from "../data/elements.server.js";
 import PeriodicTable from "../components/PeriodicTable.jsx";
 import ProgressBar from "../components/ProgressBar.jsx";
 import MetricCard from "../components/admin/MetricCard.jsx";
@@ -59,6 +59,7 @@ export const loader = async ({ request, params }) => {
   if (!detail) throw redirect("/app/admin/users");
 
   // Serialize elements for the periodic table
+  const ELEMENTS_118 = await getElements118();
   const elements = ELEMENTS_118.map(el => ({
     ...el,
     symbol: el.sym,

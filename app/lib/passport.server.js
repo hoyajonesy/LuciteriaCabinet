@@ -16,7 +16,7 @@
  */
 
 import { prisma } from './db.server.js';
-import { ELEMENTS_118 } from '../data/elements.server.js';
+import { getElements118Sync } from '../data/elements.server.js';
 import { normaliseFormat, formatLabel, formatIcon } from './formats.js';
 
 export const MAX_FEATURED_ELEMENTS = 5;
@@ -376,7 +376,7 @@ export async function updateProfile(userId, fields) {
  * Resolve a single element symbol to its canonical catalog data.
  */
 export function resolveElement(symbol) {
-  const el = ELEMENTS_118.find((e) => e.sym === symbol);
+  const el = getElements118Sync().find((e) => e.sym === symbol);
   if (!el) return null;
   return { symbol: el.sym, name: el.name, atomicNumber: el.z };
 }

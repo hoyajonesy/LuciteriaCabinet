@@ -34,7 +34,26 @@ export { buildElements118 };
  * Shopify by the inventory/product webhooks, so it stays fresh.
  */
 async function buildElements118FromDb() {
-  const rows = await prisma.product.findMany();
+  // NT-1: select ONLY the columns buildElements118FromDbRows() actually uses,
+  // so we never pull heavy columns (description, tags, collectionTypes, images…)
+  // across the wire. NT-2: exclude Archived rows the builder would never display.
+  const rows = await prisma.product.findMany({
+    where: { status: { not: "Archived" } },
+    select: {
+      sku: true,
+      handle: true,
+      title: true,
+      elementSymbol: true,
+      atomicNumber: true,
+      format: true,
+      status: true,
+      inventoryQty: true,
+      priceUsd: true,
+      shopifyProductId: true,
+      shopifyVariantId: true,
+      elementName: true,
+    },
+  });
   return buildElements118FromDbRows(rows);
 }
 
@@ -204,7 +223,51 @@ function backfillCanonicalElements(fetched) {
   return Array.from(byZ.values()).sort((a, b) => a.z - b.z);
 }
 
-const ELEMENTS_118 = backfillCanonicalElements(await buildElements118FromDb());
+// ─── Lazy, memoized catalog (NT-4) ──────────────────────────
+// Previously this module did `const ELEMENTS_118 = ...await buildElements118FromDb()`
+// at the top level, which hit the database on EVERY cold start (and on every
+// import of this module) even for requests that never touch the catalog. We now
+// load lazily and cache the result for the lifetime of the (warm) process.
+
+let _elements118Cache = null;
+
+// Canonical-only fallback (all 118 elements, NO products) computed synchronously
+// with ZERO database access. Synchronous consumers that run before the DB cache
+// is warm fall back to this so element-metadata lookups (symbol/name/atomic
+// number/group) still resolve. Product-dependent consumers always warm the
+// cache first via `await getElements118()`.
+const _canonicalFallback = backfillCanonicalElements([]);
+
+/**
+ * Load the full 118-element catalog from the database (once) and memoize it.
+ * Safe to call repeatedly — subsequent calls return the cached array.
+ */
+export async function getElements118() {
+  if (!_elements118Cache) {
+    _elements118Cache = backfillCanonicalElements(await buildElements118FromDb());
+    console.log("[catalog] loaded from database");
+  }
+  return _elements118Cache;
+}
+
+/**
+ * Synchronous accessor for the catalog. Returns the warm DB-backed cache when
+ * available, otherwise a canonical (product-less) fallback so synchronous
+ * element-metadata helpers never throw. Callers that need product data must
+ * `await getElements118()` first (that warms this cache).
+ */
+export function getElements118Sync() {
+  return _elements118Cache || _canonicalFallback;
+}
+
+/**
+ * Drop the cached catalog so the next `getElements118()` reloads from the DB.
+ * Used by product-update webhooks and the hourly cron so the catalog refreshes
+ * without a redeploy (NT-3 partial / NT-7).
+ */
+export function invalidateElements118Cache() {
+  _elements118Cache = null;
+}
 
 
 
@@ -304,7 +367,9 @@ function isPreciousMetal(symbol) {
  * Get total available elements count for a collection type
  */
 function getAvailableCount(collectionType) {
-  return ELEMENTS_118.filter(e => isAvailableForCollection(e.z, collectionType)).length;
+  // Availability is purely atomic-number based, so the canonical fallback is
+  // accurate even before the DB cache is warmed.
+  return getElements118Sync().filter(e => isAvailableForCollection(e.z, collectionType)).length;
 }
 
 /**
@@ -327,7 +392,6 @@ function getGroupColor(group) {
 }
 
 export {
-  ELEMENTS_118,
   COLLECTION_TYPES,
   PRECIOUS_METALS,
   PRECIOUS_METALS_Z,

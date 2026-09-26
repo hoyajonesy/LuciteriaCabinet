@@ -14,7 +14,7 @@ import { getUserById, updateUser } from "../lib/auth.server";
 import { bulkSetOwned } from "../lib/collection.server";
 import { checkMilestones } from "../lib/milestones.server";
 import { notifyMilestone } from "../lib/notifications-db.server";
-import { ELEMENTS_118 } from "../data/elements.server";
+import { getElements118 } from "../data/elements.server";
 import { FORMAT_LIST } from "../lib/formats";
 import WireframePeriodicTable from "../components/WireframePeriodicTable";
 
@@ -26,6 +26,7 @@ export const loader = async ({ request }) => {
   if (user.onboardingCompleted) return redirect("/app/cabinet");
 
   // Include size (periodic_size metafield) so client can filter per format
+  const ELEMENTS_118 = await getElements118();
   const elements = ELEMENTS_118.map(e => ({
     z: e.z, sym: e.sym, name: e.name,
     row: e.row, col: e.col, group: e.group, phase: e.phase,

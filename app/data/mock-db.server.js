@@ -21,7 +21,7 @@
  */
 
 import {
-  ELEMENTS_118, COLLECTION_TYPES, isAvailableForCollection,
+  COLLECTION_TYPES, isAvailableForCollection,
   isPreciousMetal, getAvailableCount,
 } from "./elements.server.js";
 
@@ -440,7 +440,7 @@ function getUpcomingAssignments() {
 // ═══════════════════════════════════════════════════════════════
 
 export {
-  ELEMENTS_118, COLLECTION_TYPES,
+  COLLECTION_TYPES,
   products, customers,
   getProducts, getProductById, getProductBySku,
   getCustomers, getCustomerById,

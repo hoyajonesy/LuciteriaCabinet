@@ -8,7 +8,7 @@
  */
 
 import { prisma } from './db.server.js';
-import { ELEMENTS_118 } from '../data/elements.server.js';
+import { getElements118 } from '../data/elements.server.js';
 
 export const CONDITIONS = ['Mint', 'Excellent', 'Good', 'Fair', 'Damaged'];
 
@@ -17,6 +17,7 @@ export const CONDITIONS = ['Mint', 'Excellent', 'Good', 'Fair', 'Damaged'];
  * Notes can be attached to any tracked element (typically OWNED).
  */
 async function ensureCollectionItem(userId, elementSymbol) {
+  const ELEMENTS_118 = await getElements118();
   const element = ELEMENTS_118.find((el) => el.sym === elementSymbol);
   if (!element) throw new Error(`Unknown element: ${elementSymbol}`);
 

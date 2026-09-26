@@ -144,7 +144,8 @@ async function handleProductUpdate(payload) {
           ? payload.tags
           : [];
       
-      const { isPreciousMetal, ELEMENTS_118 } = await import("../../data/elements.server.js");
+      const { isPreciousMetal, getElements118 } = await import("../../data/elements.server.js");
+      const ELEMENTS_118 = await getElements118();
 
       // Determine subscription eligibility
       let elementSymbol = product?.elementSymbol || "";
@@ -471,8 +472,9 @@ async function handleInventoryUpdate(payload) {
           const rawVariantId = variant.id.split("/").pop();
           const rawProductId = variant.product?.id?.split("/")?.pop();
           
-          // Import ELEMENTS_118 to resolve element symbol and name
-          const { ELEMENTS_118 } = await import("../../data/elements.server.js");
+          // Import the catalog accessor to resolve element symbol and name
+          const { getElements118 } = await import("../../data/elements.server.js");
+          const ELEMENTS_118 = await getElements118();
           
           // Try to get element symbol from metafield first, then SKU, then fallback
           let symbol = variant.elementSymbol?.value || "";

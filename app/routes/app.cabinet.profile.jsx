@@ -16,7 +16,7 @@ import { getUserById } from "../lib/auth.server";
 import { requireNotFrozen } from "../lib/frozen-guard.server";
 import { getFeatureFlag } from "../lib/feature-flags.server";
 import { getUnreadCount } from "../lib/notifications-db.server";
-import { ELEMENTS_118 } from "../data/elements.server";
+import { getElements118 } from "../data/elements.server";
 import { applyAvatarChange, AVATAR_MAX_BYTES } from "../lib/avatar.server";
 import {
   getOrCreatePassport,
@@ -52,6 +52,7 @@ export const loader = async ({ request }) => {
   const user = await getUserById(userId);
   const unreadCount = await getUnreadCount(userId);
 
+  const ELEMENTS_118 = await getElements118();
   const elements = ELEMENTS_118.map((e) => ({ sym: e.sym, name: e.name, z: e.z }));
 
   return json({

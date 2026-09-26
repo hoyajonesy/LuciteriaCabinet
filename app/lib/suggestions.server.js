@@ -37,6 +37,17 @@ export async function getSuggestedElements(userId, format, limit = 10) {
       status: "Active",
       inventoryQty: { gt: 0 },
     },
+    select: {
+      sku: true,
+      elementSymbol: true,
+      elementName: true,
+      format: true,
+      priceUsd: true,
+      retailPrice: true,
+      category: true,
+      rarityTier: true,
+      inventoryQty: true,
+    },
     orderBy: { priceUsd: "asc" },
   });
 

@@ -9,7 +9,7 @@
  * only need the definitions.
  */
 
-import { ELEMENTS_118 } from '../data/elements.server.js';
+import { getElements118Sync } from '../data/elements.server.js';
 import { FORMATS, FORMAT_LIST, parseSizes, normaliseFormat } from './formats.js';
 
 // Re-export the client-safe definitions for convenience
@@ -23,6 +23,7 @@ export { FORMATS, FORMAT_LIST } from './formats.js';
  * Since FORMATS key === id (e.g. '10mm_cube'), we match directly against formatId.
  */
 export function getAvailableElementsForFormat(formatId) {
+  const ELEMENTS_118 = getElements118Sync();
   // Validate it's a known format
   if (!FORMATS[formatId]) {
     return ELEMENTS_118.map(el => el.sym); // fallback: all elements

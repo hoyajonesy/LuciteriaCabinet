@@ -7,10 +7,11 @@ import { useLoaderData, Form, useActionData, useNavigation, useRevalidator } fro
 import { useState, useEffect } from "react";
 import { prisma } from "../lib/db.server.js";
 import { requireAdmin } from "../lib/admin-session.server.js";
-import { ELEMENTS_118 } from "../data/elements.server.js";
+import { getElements118 } from "../data/elements.server.js";
 
 export const loader = async ({ request }) => {
   await requireAdmin(request);
+  const ELEMENTS_118 = await getElements118();
   const sets = await prisma.collectionSet.findMany({
     orderBy: { createdAt: "desc" },
     include: { elements: true },

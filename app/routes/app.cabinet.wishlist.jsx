@@ -18,7 +18,7 @@ import {
   getCollectionStats,
 } from "../lib/collection.server";
 import { getUnreadCount } from "../lib/notifications-db.server";
-import { ELEMENTS_118 } from "../data/elements.server";
+import { getElements118 } from "../data/elements.server";
 import { FORMATS, FORMAT_LIST, parseSizes, normaliseFormat } from "../lib/formats";
 import { prisma } from "../lib/db.server";
 
@@ -42,6 +42,7 @@ export const loader = async ({ request }) => {
   const allProducts = await prisma.product.findMany();
   const productMap = new Map(allProducts.map(p => [p.sku, p]));
 
+  const ELEMENTS_118 = await getElements118();
   const wishlist = wantedItems.map((it) => {
     const el = ELEMENTS_118.find((e) => e.sym === it.elementSymbol);
     let variant = null;

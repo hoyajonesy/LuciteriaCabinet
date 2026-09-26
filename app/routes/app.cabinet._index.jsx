@@ -16,7 +16,7 @@ import { json, redirect } from "@remix-run/node";
 import { useLoaderData, Link } from "@remix-run/react";
 import AppNav from "../components/AppNav";
 
-import { ELEMENTS_118, isAvailableForCollection, isPreciousMetal } from "../data/elements.server";
+import { getElements118, isAvailableForCollection, isPreciousMetal } from "../data/elements.server";
 import { getUserId } from "../lib/session.server";
 import { getUserById, updateUser } from "../lib/auth.server";
 import { checkFrozenStatus, requireNotFrozen } from "../lib/frozen-guard.server";
@@ -69,6 +69,7 @@ export const loader = async ({ request }) => {
   const wantedItems = await getUserCollectionByState(userId, "WANTED");
   const wishlistItemsBySym = new Map(wantedItems.map(it => [it.elementSymbol, it]));
 
+  const ELEMENTS_118 = await getElements118();
   const recommendations = recommendationList.map((r) => {
     const wishlistItem = wishlistItemsBySym.get(r.element.sym);
     let link = null;

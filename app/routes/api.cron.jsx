@@ -22,6 +22,8 @@ import { runSwapWindowCloseJob } from "../lib/swap-window.server.js";
 import { runOnboardingGraceJob } from "../lib/subscription-onboarding.server.js";
 import { runSkipCreditExpirySweep } from "../lib/credits.server.js";
 import { logger } from "../lib/error-handling.server.js";
+import { prisma } from "../lib/db.server.js";
+import { invalidateElements118Cache } from "../data/elements.server.js";
 
 const MODULE = "api.cron";
 
@@ -103,6 +105,30 @@ async function runCronJobs(request) {
       logger.error(MODULE, `Credit expiry sweep failed: ${err.message}`, { stack: err.stack });
       results.creditExpiry = { error: err.message };
     }
+
+    // Job 4: Webhook log retention (NT-7) — delete WebhookEventLog and
+    // AppstleWebhookLog rows older than 30 days. deleteMany returns a count
+    // (never the rows themselves), keeping this cheap on network transfer.
+    try {
+      const cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const [webhookEventLog, appstleWebhookLog] = await Promise.all([
+        prisma.webhookEventLog.deleteMany({ where: { receivedAt: { lt: cutoff } } }),
+        prisma.appstleWebhookLog.deleteMany({ where: { receivedAt: { lt: cutoff } } }),
+      ]);
+      results.webhookLogCleanup = {
+        webhookEventLogDeleted: webhookEventLog.count,
+        appstleWebhookLogDeleted: appstleWebhookLog.count,
+        cutoff: cutoff.toISOString(),
+      };
+      logger.info(MODULE, "Webhook log cleanup completed", results.webhookLogCleanup);
+    } catch (err) {
+      logger.error(MODULE, `Webhook log cleanup failed: ${err.message}`, { stack: err.stack });
+      results.webhookLogCleanup = { error: err.message };
+    }
+
+    // Refresh the element catalog cache so price/inventory changes synced by
+    // webhooks appear within the hourly window even on long-lived instances.
+    invalidateElements118Cache();
 
     return json({
       success: true,

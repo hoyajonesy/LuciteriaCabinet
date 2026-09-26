@@ -14,7 +14,7 @@ import WireframePeriodicTable from "../components/WireframePeriodicTable";
 import NotesModal from "../components/NotesModal";
 import ElementStatusOverlay from "../components/ElementStatusOverlay";
 
-import { ELEMENTS_118 } from "../data/elements.server";
+import { getElements118 } from "../data/elements.server";
 import { getUserId } from "../lib/session.server";
 import { requireNotFrozen } from "../lib/frozen-guard.server";
 import { getUserById } from "../lib/auth.server";
@@ -51,6 +51,7 @@ export const loader = async ({ request }) => {
   for (const sym of stats.wantedSymbols) collectionStates[sym] = "WANTED";
   for (const sym of stats.watchlistSymbols) collectionStates[sym] = "WATCHLIST";
 
+  const ELEMENTS_118 = await getElements118();
   const elements = ELEMENTS_118.map((e) => ({
     z: e.z,
     sym: e.sym,

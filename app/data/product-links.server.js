@@ -32,7 +32,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { ELEMENTS_118 } from './elements.server.js';
+import { getElements118Sync } from './elements.server.js';
 import { resolveCanonicalElement } from './periodic-canonical.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -41,8 +41,12 @@ const CSV_PATH = path.resolve(__dirname, '../../data/products.csv');
 const FORMAT_IDS = ['10mm', '25.4mm', '50mm', 'lucite', 'ampoules'];
 
 // ─── Lookups ──────────────────────────────────────────────────
-const SYMBOLS = new Set(ELEMENTS_118.map((e) => e.sym));
-const SYM_TO_NAME = Object.fromEntries(ELEMENTS_118.map((e) => [e.sym, e.name]));
+// Only the symbol→name metadata is needed here (for SKU/title element
+// detection and fallback naming), which the canonical fallback always
+// provides — so the synchronous accessor is correct even before the DB
+// cache warms, and never forces a Product query for this module.
+const SYMBOLS = new Set(getElements118Sync().map((e) => e.sym));
+const SYM_TO_NAME = Object.fromEntries(getElements118Sync().map((e) => [e.sym, e.name]));
 
 // ─── Robust CSV parser (handles quoted fields w/ embedded newlines) ──
 function parseCSV(text) {
@@ -302,7 +306,7 @@ export function getProductLinkWithFallback(sym, formatId, elementName) {
 export function getAllProductLinks(formatId) {
   const fmt = normalizeFormatId(formatId);
   const out = {};
-  for (const el of ELEMENTS_118) {
+  for (const el of getElements118Sync()) {
     out[el.sym] = getProductLink(el.sym, fmt, el.name);
   }
   return out;

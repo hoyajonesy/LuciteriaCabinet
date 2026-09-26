@@ -60,15 +60,21 @@ export async function processWebhookIdempotently({
     status: "processing",
   };
 
+  // NT-5: select only the columns the rest of this function reads (never the
+  // stored payload) so the write doesn't echo the payload back over the wire.
   let logEntry;
   if (idempotencyKey) {
     logEntry = await prisma.appstleWebhookLog.upsert({
       where: { idempotencyKey },
       create: { ...baseData, idempotencyKey },
       update: { status: "processing", retryCount: { increment: 1 } },
+      select: { id: true, retryCount: true, maxRetries: true },
     });
   } else {
-    logEntry = await prisma.appstleWebhookLog.create({ data: baseData });
+    logEntry = await prisma.appstleWebhookLog.create({
+      data: baseData,
+      select: { id: true, retryCount: true, maxRetries: true },
+    });
   }
 
   // 3. Run the handler; record outcome.
@@ -78,6 +84,7 @@ export async function processWebhookIdempotently({
     await prisma.appstleWebhookLog.update({
       where: { id: logEntry.id },
       data: { status: "processed", processedAt: new Date(), errorMsg: null },
+      select: { id: true },
     });
 
     return { duplicate: false, logId: logEntry.id, result };
@@ -89,6 +96,7 @@ export async function processWebhookIdempotently({
         status: willExhaust ? "failed" : "retrying",
         errorMsg: error?.message?.slice(0, 1000) || "Unknown error",
       },
+      select: { id: true },
     });
     logger.error(MODULE, `Webhook handler failed for ${eventType}`, error);
     throw error;
@@ -105,5 +113,6 @@ export async function markDuplicate(logId) {
   await prisma.appstleWebhookLog.update({
     where: { id: logId },
     data: { status: "duplicate", processedAt: new Date() },
+    select: { id: true },
   });
 }

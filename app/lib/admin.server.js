@@ -5,7 +5,7 @@
  * Queries the real Prisma database (CollectionItem, User, ActivityLog, etc.)
  */
 import { prisma } from './db.server.js';
-import { ELEMENTS_118 } from '../data/elements.server.js';
+import { getElements118 } from '../data/elements.server.js';
 
 const TOTAL_ELEMENTS = 118;
 
@@ -96,6 +96,7 @@ export async function getRecentActivity(limit = 10) {
     },
   });
 
+  const ELEMENTS_118 = await getElements118();
   return activities.map(a => {
     let details = {};
     try { details = JSON.parse(a.details || '{}'); } catch { /* ignore */ }

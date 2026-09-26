@@ -19,18 +19,19 @@ if (!process.env.DATABASE_URL) {
       throw new Error(`Database operation "${String(prop)}" attempted but DATABASE_URL is not configured`);
     }
   });
-} else if (process.env.NODE_ENV === "production") {
-  prisma = new PrismaClient({
-    log: ['error'],
-  });
 } else {
-  // Reuse client in dev to avoid "too many connections" in hot reload
-  if (!global.__prisma) {
-    global.__prisma = new PrismaClient({
+  // NT-13: cache a single PrismaClient on globalThis in ALL environments.
+  // In serverless (Vercel/Neon), a warm function instance is reused across
+  // invocations; caching on globalThis prevents a fresh client — and a fresh
+  // connection + re-primed pool — on every reused invocation, which otherwise
+  // multiplies Neon connections and network round-trips. (Also avoids the
+  // classic "too many connections" from hot reload in dev.)
+  if (!globalThis.__prisma) {
+    globalThis.__prisma = new PrismaClient({
       log: ['error'],
     });
   }
-  prisma = global.__prisma;
+  prisma = globalThis.__prisma;
 }
 
 export { prisma };
