@@ -132,18 +132,14 @@ export default function AppNav({
         })}
       </nav>
 
-      {/* Switch mode */}
-      <div className="border-t border-gray-200 px-5 py-3">
-        {mode === "customer" ? (
-          <Link to="/app/admin" className="text-xs text-gray-500 hover:text-gray-700 footer-text" style={{ textDecoration: "none" }}>
-            Switch to Admin &rarr;
-          </Link>
-        ) : (
+      {/* Back to Cabinet link — shown in admin mode only */}
+      {mode !== "customer" && (
+        <div className="border-t border-gray-200 px-5 py-3">
           <Link to="/app/cabinet" className="text-xs text-gray-500 hover:text-gray-700 footer-text" style={{ textDecoration: "none" }}>
             &larr; Back to Cabinet
           </Link>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* User + logout */}
       <div className="border-t border-gray-200 px-5 py-3 flex items-center gap-2">
