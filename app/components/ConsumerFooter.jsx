@@ -44,9 +44,9 @@ export default function ConsumerFooter() {
         <div className="grid grid-cols-1 gap-10 sm:grid-cols-2 md:grid-cols-4">
           {/* Brand column */}
           <div>
-            <span className="mb-4 inline-block rounded-card-sm bg-white px-3 py-2">
+            <a href="https://luciteria.com" target="_blank" rel="noopener noreferrer" className="mb-4 inline-block rounded-card-sm bg-white px-3 py-2" style={{ textDecoration: "none" }}>
               <img src="/logo.png" alt="Luciteria Science" className="h-8 w-auto" />
-            </span>
+            </a>
             <p className="max-w-xs text-sm leading-relaxed text-luc-muted">
               Your personal element collection — beautifully tracked, organized, and grown.
             </p>
