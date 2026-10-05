@@ -49,7 +49,10 @@ export const action = async ({ request }) => {
     watchlistInAppBackInStock: boolField("watchlistInAppBackInStock"),
     watchlistInAppOutOfStock: boolField("watchlistInAppOutOfStock"),
     weeklyDigest: boolField("weeklyDigest"),
-    maxEmailsPerWeek: Math.max(0, Math.min(20, parseInt(form.get("maxEmailsPerWeek") || "5", 10))),
+    // NOTE: maxEmailsPerWeek is intentionally NOT written here. The UI row is
+    // hidden until Phase 2 enforces the cap; writing it on every save would
+    // silently reset each user's stored value to the default. Phase 2 restores
+    // both the row and this field together.
   };
   for (const r of ROWS) {
     data[`inApp${r.key}`] = boolField(`inApp${r.key}`);
@@ -191,6 +194,12 @@ function Toggle({ name, defaultChecked, wide, disabled, onToggle }) {
   };
   return (
     <label style={wrapStyle} aria-disabled={disabled || undefined}>
+      {/* Should-fix 6: a disabled checkbox is NOT submitted by the browser, so a
+          dimmed-but-ON toggle would be read as OFF on save, silently wiping the
+          stored value. We carry the current value in a hidden input while
+          disabled so turning the master back on later restores the per-event
+          settings instead of leaving everything off with no explanation. */}
+      {disabled && on ? <input type="hidden" name={name} value="on" /> : null}
       <input
         type="checkbox"
         name={name}

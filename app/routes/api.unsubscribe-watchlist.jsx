@@ -10,38 +10,22 @@
  */
 import { json, redirect } from "@remix-run/node";
 import { useLoaderData } from "@remix-run/react";
-import { verifyUnsubToken } from "../lib/unsub-token.server";
-import { updatePreferences } from "../lib/notifications-db.server";
-
-function readParams(request) {
-  const url = new URL(request.url);
-  return {
-    uid: url.searchParams.get("uid"),
-    token: url.searchParams.get("token"),
-  };
-}
+import { evaluateUnsubGet, performUnsubPost } from "../lib/unsubscribe.server";
 
 // GET: do NOT mutate state. Validate inputs enough to show a sensible page,
 // then render a standalone confirmation form that POSTs back to this route.
+// (Core logic lives in unsubscribe.server.js so it is unit-testable.)
 export const loader = async ({ request }) => {
-  const { uid, token } = readParams(request);
-  if (!uid || !token) {
-    return json({ valid: false, uid: null, token: null }, { status: 400 });
-  }
-  const valid = verifyUnsubToken(uid, token);
-  return json({ valid, uid, token }, { status: valid ? 200 : 403 });
+  const { valid, uid, token, status } = evaluateUnsubGet(request);
+  return json({ valid, uid, token }, { status });
 };
 
 // POST: perform the unsubscribe after re-verifying the token.
 export const action = async ({ request }) => {
-  const { uid, token } = readParams(request);
-  if (!uid || !token) {
-    return json({ error: "Missing uid or token" }, { status: 400 });
+  const result = await performUnsubPost(request);
+  if (result.error) {
+    return json({ error: result.error }, { status: result.status });
   }
-  if (!verifyUnsubToken(uid, token)) {
-    return json({ error: "Invalid token" }, { status: 403 });
-  }
-  await updatePreferences(uid, { watchlistEmailAlerts: false });
   return redirect("/unsubscribe-confirmed");
 };
 

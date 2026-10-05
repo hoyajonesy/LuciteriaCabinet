@@ -587,16 +587,26 @@ async function sendWatchlistStockEmail({
 
   // FR-7.6: the gate is ALWAYS enforced. If the caller didn't hand us prefs,
   // load them here so a failed/absent lookup can't bypass the user's choice.
+  // When we cannot establish the user's preferences at all (no customerId to
+  // look them up, or the lookup throws), we REFUSE to send rather than risk
+  // emailing someone who opted out. Opt-outs win over delivery.
   let resolvedPrefs = prefs;
-  if (!resolvedPrefs && customerId) {
+  if (!resolvedPrefs) {
+    if (!customerId) {
+      console.warn(
+        "[sendWatchlistStockEmail] skipped — no prefs and no customerId to verify opt-out"
+      );
+      return null;
+    }
     try {
       const { getPreferences } = await import("./notifications-db.server.js");
       resolvedPrefs = await getPreferences(customerId);
     } catch (err) {
       console.warn(
-        `[sendWatchlistStockEmail] could not load prefs for ${customerId}, allowing send:`,
+        `[sendWatchlistStockEmail] skipped — could not load prefs for ${customerId}, refusing send to honor opt-outs:`,
         err.message
       );
+      return null;
     }
   }
 

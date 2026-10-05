@@ -38,6 +38,7 @@ test("single email: subject and body name the same element", async () => {
     inventoryQty: 4,
     linkUrl: "/app/cabinet/shop?product=hydrogen",
     customerName: "Ada",
+    prefs: { watchlistEmailAlerts: true, watchlistEmailBackInStock: true, watchlistEmailOutOfStock: true, mutedUntil: null },
   });
 
   const email = latestEmailTo(to);
@@ -77,6 +78,7 @@ test("batch run: Hydrogen and Mercury dispatched together stay matched (no cross
       productTitle: "Hydrogen Gas Ampoule",
       inventoryQty: 7,
       customerName: "Grace",
+      prefs: { watchlistEmailAlerts: true, watchlistEmailBackInStock: true, watchlistEmailOutOfStock: true, mutedUntil: null },
     }),
     sendWatchlistStockEmail({
       to: hgTo,
@@ -85,6 +87,7 @@ test("batch run: Hydrogen and Mercury dispatched together stay matched (no cross
       elementSymbol: "Hg",
       productTitle: "Mercury 10mm Cube",
       customerName: "Alan",
+      prefs: { watchlistEmailAlerts: true, watchlistEmailBackInStock: true, watchlistEmailOutOfStock: true, mutedUntil: null },
     }),
   ]);
 
@@ -150,6 +153,7 @@ test("FR-6 robustness: displayLabel derived via canonical resolution from produc
     productTitle: "Phosphorus 10mm Cube", // CORRECT (the source of truth)
     inventoryQty: 2,
     customerName: "Dmitri",
+    prefs: { watchlistEmailAlerts: true, watchlistEmailBackInStock: true, watchlistEmailOutOfStock: true, mutedUntil: null },
   });
 
   const email = latestEmailTo(to);
@@ -173,6 +177,7 @@ test("FR-6 robustness: displayLabel derived via canonical resolution from produc
  * ────────────────────────────────────────────────────────────────────────── */
 import { mock } from "node:test";
 import { generateUnsubToken, verifyUnsubToken } from "../app/lib/unsub-token.server.js";
+import { evaluateUnsubGet, performUnsubPost } from "../app/lib/unsubscribe.server.js";
 
 test("gate: watchlistEmailAlerts=false blocks the email entirely", async () => {
   const to = "gate-master-off@example.com";
@@ -264,7 +269,7 @@ test("gate self-load: opted-out prefs loaded via getPreferences block the email"
   // When the caller passes customerId but no prefs, the gate self-loads them
   // via a dynamic import of notifications-db.server.js. Mock that module so the
   // loaded prefs say the user opted out of email — the email must be blocked.
-  mock.module("../app/lib/notifications-db.server.js", {
+  const __dbMock = mock.module("../app/lib/notifications-db.server.js", {
     namedExports: {
       getPreferences: async () => ({ watchlistEmailAlerts: false }),
     },
@@ -283,22 +288,52 @@ test("gate self-load: opted-out prefs loaded via getPreferences block the email"
   assert.strictEqual(result, null, "self-loaded opt-out should block");
   assert.strictEqual(latestEmailTo(to), undefined, "no email after self-load opt-out");
 
-  mock.reset();
+  __dbMock.restore();
 });
 
-test("no customerId and no prefs: email sends (nothing to gate on)", async () => {
-  // Existing callers (and FR-6 tests) call without customerId/prefs; the gate is
-  // skipped and the email sends. This locks in that backwards-compatible path.
-  const to = "no-prefs-sends@example.com";
-  await sendWatchlistStockEmail({
+test("no customerId and no prefs: email is REFUSED (cannot verify opt-out)", async () => {
+  // Must-fix 3: when the function cannot establish the user's preferences at all
+  // (no prefs passed AND no customerId to look them up), it must refuse to send
+  // rather than risk emailing someone who opted out. Opt-outs win over delivery.
+  const to = "no-prefs-refused@example.com";
+  const result = await sendWatchlistStockEmail({
     to,
     backInStock: true,
     elementName: "Nitrogen",
     elementSymbol: "N",
     productTitle: "Nitrogen Ampoule",
     inventoryQty: 2,
+    // no customerId, no prefs — nothing to verify against
   });
-  assert.ok(latestEmailTo(to), "email sends when there is nothing to gate on");
+  assert.strictEqual(result, null, "must refuse when opt-out cannot be verified");
+  assert.strictEqual(latestEmailTo(to), undefined, "no email when prefs are unknowable");
+});
+
+test("gate self-load throws: email is REFUSED (cannot verify opt-out)", async () => {
+  // Must-fix 3: if the self-load lookup throws, we refuse to send rather than
+  // bypass the user's choice.
+  const __dbMock = mock.module("../app/lib/notifications-db.server.js", {
+    namedExports: {
+      getPreferences: async () => {
+        throw new Error("db unavailable");
+      },
+    },
+  });
+
+  const to = "gate-selfload-throws@example.com";
+  const result = await sendWatchlistStockEmail({
+    to,
+    backInStock: true,
+    elementName: "Oxygen",
+    elementSymbol: "O",
+    productTitle: "Oxygen Ampoule",
+    customerId: "cust-selfload-throws",
+    // no prefs — forces self-load, which throws
+  });
+  assert.strictEqual(result, null, "must refuse when the prefs lookup throws");
+  assert.strictEqual(latestEmailTo(to), undefined, "no email when prefs lookup fails");
+
+  __dbMock.restore();
 });
 
 /* ── FR-7.5 — unsubscribe token generate/verify ───────────────────────────── */
@@ -330,4 +365,62 @@ test("unsub token: verify rejects a missing token", () => {
   process.env.UNSUB_SECRET = "test-unsub-secret";
   assert.strictEqual(verifyUnsubToken("user-123", ""), false);
   assert.strictEqual(verifyUnsubToken("user-123", undefined), false);
+});
+
+
+/* ── FR-7.5 — unsubscribe route: GET is read-only, POST mutates ────────────── */
+
+// Helper: build a Request for the unsubscribe route with the given uid/token.
+function unsubRequest(uid, token, method = "GET") {
+  const base = "https://cabinet.luciteria.com/api/unsubscribe-watchlist";
+  const qs = new URLSearchParams();
+  if (uid != null) qs.set("uid", uid);
+  if (token != null) qs.set("token", token);
+  return new Request(`${base}?${qs.toString()}`, { method });
+}
+
+test("unsub route: GET with a valid token changes NOTHING (read-only)", async () => {
+  process.env.UNSUB_SECRET = "route-secret";
+  const token = generateUnsubToken("user-get");
+  // evaluateUnsubGet has no mutation path at all — it only validates. A valid
+  // token yields a confirm page (valid:true) and never touches the database.
+  const result = evaluateUnsubGet(unsubRequest("user-get", token, "GET"));
+  assert.strictEqual(result.valid, true, "valid token is recognized");
+  assert.strictEqual(result.status, 200);
+});
+
+test("unsub route: POST with a bad token is rejected and changes nothing", async () => {
+  process.env.UNSUB_SECRET = "route-secret";
+  let updateCalls = 0;
+  const update = async () => {
+    updateCalls += 1;
+  };
+  const result = await performUnsubPost(
+    unsubRequest("user-bad", "deadbeef", "POST"),
+    { update }
+  );
+  assert.ok(result.error, "bad token returns an error");
+  assert.strictEqual(result.status, 403);
+  assert.strictEqual(updateCalls, 0, "a rejected POST must not mutate");
+});
+
+test("unsub route: POST with a valid token turns watchlistEmailAlerts off", async () => {
+  process.env.UNSUB_SECRET = "route-secret";
+  const calls = [];
+  const update = async (uid, data) => {
+    calls.push({ uid, data });
+  };
+  const token = generateUnsubToken("user-ok");
+  const result = await performUnsubPost(
+    unsubRequest("user-ok", token, "POST"),
+    { update }
+  );
+  assert.deepStrictEqual(result, { ok: true });
+  assert.strictEqual(calls.length, 1, "exactly one preference update");
+  assert.strictEqual(calls[0].uid, "user-ok");
+  assert.deepStrictEqual(
+    calls[0].data,
+    { watchlistEmailAlerts: false },
+    "only watchlistEmailAlerts is turned off"
+  );
 });
