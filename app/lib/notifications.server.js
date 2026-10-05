@@ -101,7 +101,7 @@ This is an automated watchlist stock alert from your Luciteria Collector Cabinet
  * Send an email notification (stub / SMTP)
  * Logs to console, sends via SMTP if configured, and stores in memory
  */
-async function sendEmail({ to, subject, template, data, customerId }) {
+async function sendEmail({ to, subject, template, data, customerId, unsubscribeUrl }) {
   const notification = {
     id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
     channel: "email",
@@ -220,6 +220,10 @@ This is an automated restock alert from your Luciteria Collector Cabinet wishlis
         // FR-6: reuse the exact body captured on the notification (rendered
         // from the same displayLabel the subject used) — never re-derive it.
         text = notification.text ?? renderWatchlistStockBody(template, data);
+        // FR-7.5: append one-click unsubscribe + manage-all footer
+        const appUrl = process.env.APP_URL || 'https://cabinet.luciteria.com';
+        text += `\n\nStop these emails: ${unsubscribeUrl || `${appUrl}/app/cabinet/notifications/preferences`}`;
+        text += `\nManage all alerts: ${appUrl}/app/cabinet/notifications/preferences`;
       } else if (template === 'forgot_password') {
         const userName = data.customerName || 'Collector';
         const resetLink = data.resetLink || '';
@@ -377,12 +381,20 @@ This is an automated notification. Please do not reply to this email.`;
         text += `Happy Collecting,\nThe Luciteria Team\n\n---\n\nThis is an automated notification.`;
       }
 
-      await transporter.sendMail({
+      const mailOptions = {
         from: process.env.EMAIL_FROM || 'sales.starkedge@gmail.com',
         to,
         subject,
         text,
-      });
+      };
+      // FR-7.5: RFC 8058 one-click unsubscribe headers for watchlist emails
+      if (unsubscribeUrl) {
+        mailOptions.headers = {
+          'List-Unsubscribe': `<${unsubscribeUrl}>`,
+          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+        };
+      }
+      await transporter.sendMail(mailOptions);
       console.log(`   ✅ Email successfully sent via SMTP to ${to}`);
       notification.status = "sent";
     } catch (error) {
@@ -553,10 +565,35 @@ async function sendWatchlistStockEmail({
   linkUrl,
   customerName,
   customerId,
+  unsubscribeUrl, // NEW — signed one-click unsubscribe URL (FR-7.5)
+  prefs,          // NEW — NotificationPreference object (optional); if absent, gate is skipped (legacy callers)
 }) {
   if (!to) {
     console.warn("[sendWatchlistStockEmail] skipped — no recipient email");
     return null;
+  }
+
+  // FR-7.6: enforce channel + event-type preference inside the send function
+  if (prefs) {
+    // Master channel gate
+    if (prefs.watchlistEmailAlerts === false) {
+      console.info(`[sendWatchlistStockEmail] skipped — watchlistEmailAlerts off for ${customerId}`);
+      return null;
+    }
+    // mutedUntil
+    if (prefs.mutedUntil && new Date(prefs.mutedUntil) > new Date()) {
+      console.info(`[sendWatchlistStockEmail] skipped — mutedUntil for ${customerId}`);
+      return null;
+    }
+    // Event-type gate
+    if (backInStock && prefs.watchlistEmailBackInStock === false) {
+      console.info(`[sendWatchlistStockEmail] skipped — watchlistEmailBackInStock off for ${customerId}`);
+      return null;
+    }
+    if (!backInStock && prefs.watchlistEmailOutOfStock === false) {
+      console.info(`[sendWatchlistStockEmail] skipped — watchlistEmailOutOfStock off for ${customerId}`);
+      return null;
+    }
   }
 
   // ─── FR-6: single source of truth per email ──────────────────────────────
@@ -615,6 +652,7 @@ async function sendWatchlistStockEmail({
       linkUrl: event.linkUrl,
     },
     customerId,
+    unsubscribeUrl,
   });
 }
 

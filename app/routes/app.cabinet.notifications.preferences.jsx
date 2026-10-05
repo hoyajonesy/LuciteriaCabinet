@@ -22,8 +22,10 @@ export const loader = async ({ request }) => {
   const authUser = await getUserById(userId);
   if (!authUser) return redirect("/onboarding/welcome");
   const pref = await getPreferences(userId);
+  const unsubscribed = new URL(request.url).searchParams.get("unsubscribed") === "1";
   return json({
     pref,
+    unsubscribed,
     authUser: { userType: authUser.userType, isSubscriber: authUser.isSubscriber },
   });
 };
@@ -34,8 +36,18 @@ export const action = async ({ request }) => {
   const form = await request.formData();
 
   const boolField = (name) => form.get(name) === "on";
+  const watchlistEmailAlerts = boolField("watchlistEmailAlerts");
+  const watchlistInAppAlerts = boolField("watchlistInAppAlerts");
   const data = {
-    watchlistAlerts: boolField("watchlistAlerts"),
+    // Keep the legacy all-or-nothing flag in sync: on if either channel is on.
+    watchlistAlerts: watchlistEmailAlerts || watchlistInAppAlerts,
+    // FR-7.1 / FR-7.2: per-channel, per-event-type watchlist alert prefs
+    watchlistEmailAlerts,
+    watchlistInAppAlerts,
+    watchlistEmailBackInStock: boolField("watchlistEmailBackInStock"),
+    watchlistEmailOutOfStock: boolField("watchlistEmailOutOfStock"),
+    watchlistInAppBackInStock: boolField("watchlistInAppBackInStock"),
+    watchlistInAppOutOfStock: boolField("watchlistInAppOutOfStock"),
     weeklyDigest: boolField("weeklyDigest"),
     maxEmailsPerWeek: Math.max(0, Math.min(20, parseInt(form.get("maxEmailsPerWeek") || "5", 10))),
   };
@@ -48,7 +60,7 @@ export const action = async ({ request }) => {
 };
 
 export default function NotificationPreferences() {
-  const { pref, authUser } = useLoaderData();
+  const { pref, authUser, unsubscribed } = useLoaderData();
   const fetcher = useFetcher();
   const saved = fetcher.data?.ok && fetcher.state === "idle";
 
@@ -63,6 +75,12 @@ export default function NotificationPreferences() {
           </div>
           <Link to="/app/cabinet/notifications" style={styles.backLink}>← Back to inbox</Link>
         </div>
+
+        {unsubscribed && (
+          <div style={styles.unsubBanner}>
+            ✓ You've been unsubscribed from watchlist stock emails.
+          </div>
+        )}
 
         <fetcher.Form method="post">
           <div style={styles.card}>
@@ -84,13 +102,46 @@ export default function NotificationPreferences() {
           </div>
 
           <div style={styles.card}>
+            <div style={styles.tableHead}>
+              <span style={{ flex: 1 }}>Wishlist stock alerts</span>
+              <span style={styles.colHead}>In-app</span>
+              <span style={styles.colHead}>Email</span>
+            </div>
             <div style={styles.row}>
               <div style={{ flex: 1 }}>
-                <div style={styles.rowLabel}>Wishlist stock alerts</div>
-                <div style={styles.rowDesc}>Notify me when a wishlist item is back in stock or goes out of stock</div>
+                <div style={styles.rowLabel}>Back in stock</div>
+                <div style={styles.rowDesc}>When a wishlist item is back in stock</div>
               </div>
-              <Toggle name="watchlistAlerts" defaultChecked={pref.watchlistAlerts} wide />
+              <Toggle name="watchlistInAppBackInStock" defaultChecked={pref.watchlistInAppBackInStock} />
+              <Toggle name="watchlistEmailBackInStock" defaultChecked={pref.watchlistEmailBackInStock} />
             </div>
+            <div style={styles.row}>
+              <div style={{ flex: 1 }}>
+                <div style={styles.rowLabel}>Out of stock</div>
+                <div style={styles.rowDesc}>When a wishlist item goes out of stock</div>
+              </div>
+              <Toggle name="watchlistInAppOutOfStock" defaultChecked={pref.watchlistInAppOutOfStock} />
+              <Toggle name="watchlistEmailOutOfStock" defaultChecked={pref.watchlistEmailOutOfStock} />
+            </div>
+            <div style={styles.row}>
+              <div style={{ flex: 1 }}>
+                <div style={styles.rowLabel}>All wishlist in-app alerts</div>
+                <div style={styles.rowDesc}>Master switch for in-app wishlist stock alerts</div>
+              </div>
+              <Toggle name="watchlistInAppAlerts" defaultChecked={pref.watchlistInAppAlerts} />
+              <span style={{ width: 80 }} />
+            </div>
+            <div style={styles.row}>
+              <div style={{ flex: 1 }}>
+                <div style={styles.rowLabel}>All wishlist email alerts</div>
+                <div style={styles.rowDesc}>Master switch for wishlist stock emails</div>
+              </div>
+              <span style={{ width: 80 }} />
+              <Toggle name="watchlistEmailAlerts" defaultChecked={pref.watchlistEmailAlerts} />
+            </div>
+          </div>
+
+          <div style={styles.card}>
             <div style={styles.row}>
               <div style={{ flex: 1 }}>
                 <div style={styles.rowLabel}>Weekly digest</div>
@@ -101,7 +152,7 @@ export default function NotificationPreferences() {
             <div style={styles.row}>
               <div style={{ flex: 1 }}>
                 <div style={styles.rowLabel}>Max emails per week</div>
-                <div style={styles.rowDesc}>We'll never exceed this limit</div>
+                <div style={styles.rowDesc}>A soft cap on how many emails we send you each week</div>
               </div>
               <input type="number" name="maxEmailsPerWeek" min="0" max="20" defaultValue={pref.maxEmailsPerWeek} style={styles.numberInput} />
             </div>
@@ -138,6 +189,7 @@ const styles = {
   title: { fontSize: 26, fontWeight: 800, color: "#1a1a2e", margin: 0 },
   subtitle: { fontSize: 14, color: "#666", margin: "4px 0 0" },
   backLink: { fontSize: 13, color: "#1976D2", textDecoration: "none", fontWeight: 600 },
+  unsubBanner: { background: "#e8f5e9", border: "1px solid #a5d6a7", color: "#2e7d32", borderRadius: 10, padding: "12px 16px", fontSize: 14, fontWeight: 600, marginBottom: 16 },
   card: { background: "#fff", borderRadius: 12, border: "1px solid #e9ecef", padding: "8px 20px", marginBottom: 16 },
   tableHead: { display: "flex", alignItems: "center", padding: "12px 0", borderBottom: "1px solid #f0f0f0", fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "#999" },
   colHead: { width: 80, textAlign: "center" },

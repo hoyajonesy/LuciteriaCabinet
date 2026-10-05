@@ -995,7 +995,16 @@ model NotificationPreference {
   emailNewArrival     Boolean @default(false)
 
   // Watchlist stock alerts (in-app + email) for wishlisted elements going in/out of stock
+  // Legacy all-or-nothing toggle — kept for backward compat + migration source
   watchlistAlerts Boolean @default(true)
+
+  // FR-7.1 / FR-7.2: per-channel, per-event-type watchlist alert preferences
+  watchlistEmailAlerts      Boolean @default(true)
+  watchlistInAppAlerts      Boolean @default(true)
+  watchlistEmailBackInStock Boolean @default(true)
+  watchlistEmailOutOfStock  Boolean @default(false)
+  watchlistInAppBackInStock Boolean @default(true)
+  watchlistInAppOutOfStock  Boolean @default(true)
 
   // Weekly digest of low-signal events
   weeklyDigest     Boolean   @default(true)

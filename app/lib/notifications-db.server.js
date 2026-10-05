@@ -26,8 +26,8 @@ export const CATEGORIES = {
   NEAR_COMPLETION: { inApp: 'inAppNearCompletion', email: 'emailNearCompletion', icon: '🎯' },
   RESTOCK: { inApp: 'inAppRestock', email: 'emailRestock', icon: '🔔' },
   NEW_ARRIVAL: { inApp: 'inAppNewArrival', email: 'emailNewArrival', icon: '✨' },
-  [WATCHLIST_BACK_IN_STOCK]: { inApp: 'watchlistAlerts', email: null, icon: '🔔' },
-  [WATCHLIST_OUT_OF_STOCK]: { inApp: 'watchlistAlerts', email: null, icon: '⚠️' },
+  [WATCHLIST_BACK_IN_STOCK]: { inApp: 'watchlistInAppAlerts', email: null, icon: '🔔' },
+  [WATCHLIST_OUT_OF_STOCK]: { inApp: 'watchlistInAppAlerts', email: null, icon: '⚠️' },
   SYSTEM: { inApp: null, email: null, icon: '⚙️' },
   ADMIN: { inApp: null, email: null, icon: '📣' },
 };

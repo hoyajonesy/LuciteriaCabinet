@@ -30,6 +30,7 @@
  * REQUIRED SCOPES: (webhooks use the same scopes as the API calls they trigger)
  */
 
+import { createHmac } from "node:crypto";
 import { IS_PROTOTYPE } from "../../config/environment.server.js";
 import { logger } from "../../lib/error-handling.server.js";
 import { SHOPIFY_CONFIG } from "../../config/environment.server.js";
@@ -38,6 +39,16 @@ import { syncSkuAvailability } from "../../lib/inventory-sync.server.js";
 import { shopifyClient } from "./shopify-client.server.js";
 
 const MODULE = "shopify-webhooks";
+
+/**
+ * FR-7.5: Generate a signed one-click unsubscribe token for a user.
+ * HMAC-SHA256 of the user id so the /api/unsubscribe-watchlist endpoint can
+ * verify the request came from a Luciteria email without a DB lookup.
+ */
+function generateUnsubToken(userId) {
+  const secret = process.env.UNSUB_SECRET || process.env.SESSION_SECRET || "luciteria-unsub";
+  return createHmac("sha256", secret).update(userId).digest("hex");
+}
 
 /**
  * Validate webhook HMAC signature.
@@ -677,7 +688,7 @@ async function dispatchWatchlistStockAlerts(product, availableQty, backInStock) 
       continue;
     }
 
-    // Honor the user's watchlist alert preference (default on).
+    // Load the user's notification preferences (default on if unavailable).
     let prefs;
     try {
       prefs = await getPreferences(user.id);
@@ -685,24 +696,36 @@ async function dispatchWatchlistStockAlerts(product, availableQty, backInStock) 
       logger.error(MODULE, `Failed to load preferences for user ${user.id}: ${err.message}`, err);
       prefs = null;
     }
-    if (prefs && prefs.watchlistAlerts === false) {
-      logger.info(MODULE, `Watchlist alert skipped for user ${user.email} (opted out via watchlistAlerts)`);
-      continue;
-    }
 
-    // In-app notification (gated in-app by watchlistAlerts inside notify()).
-    const dedupeKey = `watchlist:${backInStock ? "in" : "out"}:${product.id}:${bucket}`;
-    try {
-      await notify(user.id, {
-        category,
-        title,
-        body,
-        linkUrl: productUrl,
-        dedupeKey,
-      });
-      logger.info(MODULE, `Watchlist in-app notification dispatched for user ${user.email} (SKU: ${product.sku})`);
-    } catch (err) {
-      logger.error(MODULE, `Failed to create watchlist notification for user ${user.email}: ${err.message}`, err);
+    // FR-7.6: in-app gate — master channel + per-event-type.
+    const inAppMasterOff = prefs && prefs.watchlistInAppAlerts === false;
+    const inAppEventOff =
+      prefs &&
+      ((backInStock && prefs.watchlistInAppBackInStock === false) ||
+        (!backInStock && prefs.watchlistInAppOutOfStock === false));
+
+    if (inAppMasterOff) {
+      logger.info(MODULE, `Watchlist in-app alert skipped for user ${user.email} (watchlistInAppAlerts off)`);
+    } else if (inAppEventOff) {
+      logger.info(
+        MODULE,
+        `Watchlist in-app alert skipped for user ${user.email} (${backInStock ? "watchlistInAppBackInStock" : "watchlistInAppOutOfStock"} off)`
+      );
+    } else {
+      // In-app notification (gated in-app by watchlistInAppAlerts inside notify()).
+      const dedupeKey = `watchlist:${backInStock ? "in" : "out"}:${product.id}:${bucket}`;
+      try {
+        await notify(user.id, {
+          category,
+          title,
+          body,
+          linkUrl: productUrl,
+          dedupeKey,
+        });
+        logger.info(MODULE, `Watchlist in-app notification dispatched for user ${user.email} (SKU: ${product.sku})`);
+      } catch (err) {
+        logger.error(MODULE, `Failed to create watchlist notification for user ${user.email}: ${err.message}`, err);
+      }
     }
 
     // Email — fire-and-forget so we never block the webhook response.
@@ -727,6 +750,8 @@ async function dispatchWatchlistStockAlerts(product, availableQty, backInStock) 
         linkUrl: productUrl,
         customerName,
         customerId: user.id,
+        prefs, // FR-7.6: gate (channel + event-type + mutedUntil) now lives inside
+        unsubscribeUrl: `${process.env.APP_URL || "https://cabinet.luciteria.com"}/api/unsubscribe-watchlist?uid=${user.id}&token=${generateUnsubToken(user.id)}`,
       }).catch((err) => {
         logger.error(MODULE, `Watchlist stock email failed for ${user.email}: ${err.message}`, err);
       });

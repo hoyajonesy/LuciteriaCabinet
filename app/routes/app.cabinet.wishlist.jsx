@@ -316,6 +316,13 @@ export default function WishlistPage() {
               <p className="text-sm text-gray-500 mt-1">
                 {wishlist.length} element{wishlist.length !== 1 ? "s" : ""} you're hoping to collect. Share the whole list, or just one item.
               </p>
+              <Link
+                to="/app/cabinet/notifications/preferences"
+                style={{ fontSize: 13, color: "#1976D2", textDecoration: "none" }}
+                className="inline-block mt-1"
+              >
+                ⚙ Stock alert settings
+              </Link>
             </div>
             <div className="flex gap-3">
               <button
