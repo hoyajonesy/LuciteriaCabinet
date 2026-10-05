@@ -30,7 +30,7 @@
  * REQUIRED SCOPES: (webhooks use the same scopes as the API calls they trigger)
  */
 
-import { createHmac } from "node:crypto";
+import { generateUnsubToken } from "../../lib/unsub-token.server.js";
 import { IS_PROTOTYPE } from "../../config/environment.server.js";
 import { logger } from "../../lib/error-handling.server.js";
 import { SHOPIFY_CONFIG } from "../../config/environment.server.js";
@@ -39,16 +39,6 @@ import { syncSkuAvailability } from "../../lib/inventory-sync.server.js";
 import { shopifyClient } from "./shopify-client.server.js";
 
 const MODULE = "shopify-webhooks";
-
-/**
- * FR-7.5: Generate a signed one-click unsubscribe token for a user.
- * HMAC-SHA256 of the user id so the /api/unsubscribe-watchlist endpoint can
- * verify the request came from a Luciteria email without a DB lookup.
- */
-function generateUnsubToken(userId) {
-  const secret = process.env.UNSUB_SECRET || process.env.SESSION_SECRET || "luciteria-unsub";
-  return createHmac("sha256", secret).update(userId).digest("hex");
-}
 
 /**
  * Validate webhook HMAC signature.
@@ -632,9 +622,12 @@ function watchlistFormatMatches(wishlistFormat, prod) {
  *
  * Finds users who have the affected element on their wishlist (CollectionItem
  * in WANTED or WATCHLIST state — the states the wishlist / periodic-table UI
- * uses), respects each user's `watchlistAlerts` preference, writes an in-app
- * Notification via the existing notify() helper, and fires a transactional
- * email (fire-and-forget) so the webhook response is never blocked.
+ * uses). In-app alerts are gated here by the split preference fields
+ * (`watchlistInAppAlerts` master + the per-event `watchlistInApp{Back,Out}OfStock`
+ * toggles) before notify() runs; the email path passes `prefs` through to
+ * sendWatchlistStockEmail, which enforces the email-side gate itself (FR-7.6).
+ * Both write via the existing helpers and the email is fire-and-forget so the
+ * webhook response is never blocked.
  *
  * @param {Object} product - The affected local Product record
  * @param {number} availableQty - The new available quantity

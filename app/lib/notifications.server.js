@@ -220,9 +220,13 @@ This is an automated restock alert from your Luciteria Collector Cabinet wishlis
         // FR-6: reuse the exact body captured on the notification (rendered
         // from the same displayLabel the subject used) — never re-derive it.
         text = notification.text ?? renderWatchlistStockBody(template, data);
-        // FR-7.5: append one-click unsubscribe + manage-all footer
+        // FR-7.5 / Should-fix 7: manage-all footer always; one-click "Stop these
+        // emails" line ONLY when we have a real signed unsubscribe URL (never a
+        // broken fallback link).
         const appUrl = process.env.APP_URL || 'https://cabinet.luciteria.com';
-        text += `\n\nStop these emails: ${unsubscribeUrl || `${appUrl}/app/cabinet/notifications/preferences`}`;
+        if (unsubscribeUrl) {
+          text += `\n\nStop these emails: ${unsubscribeUrl}`;
+        }
         text += `\nManage all alerts: ${appUrl}/app/cabinet/notifications/preferences`;
       } else if (template === 'forgot_password') {
         const userName = data.customerName || 'Collector';
@@ -541,8 +545,14 @@ async function notifyRestockAlert(customer, product) {
  *
  * Fired (fire-and-forget) from the inventory webhook when a wishlisted element
  * transitions in or out of stock. Uses the existing nodemailer transporter via
- * sendEmail(). The caller is responsible for checking the user's watchlistAlerts
- * preference and that a valid email address exists before invoking this.
+ * sendEmail().
+ *
+ * FR-7.6: the preference gate lives HERE, not in the callers. It enforces the
+ * per-channel email master (`watchlistEmailAlerts`), the per-event-type email
+ * toggles (`watchlistEmailBackInStock` / `watchlistEmailOutOfStock`), and
+ * `mutedUntil`. Callers may pass a `prefs` object they already loaded; if they
+ * don't, this function loads it itself via getPreferences(customerId), so a
+ * direct call for an opted-out user always sends nothing.
  *
  * @param {Object} args
  * @param {string} args.to - Recipient email address (required)
@@ -553,7 +563,9 @@ async function notifyRestockAlert(customer, product) {
  * @param {number} [args.inventoryQty] - Current available quantity (back-in-stock)
  * @param {string} [args.linkUrl] - Link to the product in the cabinet shop
  * @param {string} [args.customerName] - Recipient's first name
- * @param {string} [args.customerId] - Local user id, for logging
+ * @param {string} [args.customerId] - Local user id, for logging + prefs self-load
+ * @param {string} [args.unsubscribeUrl] - Signed one-click unsubscribe URL (FR-7.5)
+ * @param {Object} [args.prefs] - NotificationPreference; self-loaded if omitted
  */
 async function sendWatchlistStockEmail({
   to,
@@ -565,32 +577,46 @@ async function sendWatchlistStockEmail({
   linkUrl,
   customerName,
   customerId,
-  unsubscribeUrl, // NEW — signed one-click unsubscribe URL (FR-7.5)
-  prefs,          // NEW — NotificationPreference object (optional); if absent, gate is skipped (legacy callers)
+  unsubscribeUrl, // signed one-click unsubscribe URL (FR-7.5)
+  prefs,          // NotificationPreference; self-loaded below when absent (FR-7.6)
 }) {
   if (!to) {
     console.warn("[sendWatchlistStockEmail] skipped — no recipient email");
     return null;
   }
 
-  // FR-7.6: enforce channel + event-type preference inside the send function
-  if (prefs) {
-    // Master channel gate
-    if (prefs.watchlistEmailAlerts === false) {
+  // FR-7.6: the gate is ALWAYS enforced. If the caller didn't hand us prefs,
+  // load them here so a failed/absent lookup can't bypass the user's choice.
+  let resolvedPrefs = prefs;
+  if (!resolvedPrefs && customerId) {
+    try {
+      const { getPreferences } = await import("./notifications-db.server.js");
+      resolvedPrefs = await getPreferences(customerId);
+    } catch (err) {
+      console.warn(
+        `[sendWatchlistStockEmail] could not load prefs for ${customerId}, allowing send:`,
+        err.message
+      );
+    }
+  }
+
+  if (resolvedPrefs) {
+    // Master email channel gate
+    if (resolvedPrefs.watchlistEmailAlerts === false) {
       console.info(`[sendWatchlistStockEmail] skipped — watchlistEmailAlerts off for ${customerId}`);
       return null;
     }
     // mutedUntil
-    if (prefs.mutedUntil && new Date(prefs.mutedUntil) > new Date()) {
+    if (resolvedPrefs.mutedUntil && new Date(resolvedPrefs.mutedUntil) > new Date()) {
       console.info(`[sendWatchlistStockEmail] skipped — mutedUntil for ${customerId}`);
       return null;
     }
     // Event-type gate
-    if (backInStock && prefs.watchlistEmailBackInStock === false) {
+    if (backInStock && resolvedPrefs.watchlistEmailBackInStock === false) {
       console.info(`[sendWatchlistStockEmail] skipped — watchlistEmailBackInStock off for ${customerId}`);
       return null;
     }
-    if (!backInStock && prefs.watchlistEmailOutOfStock === false) {
+    if (!backInStock && resolvedPrefs.watchlistEmailOutOfStock === false) {
       console.info(`[sendWatchlistStockEmail] skipped — watchlistEmailOutOfStock off for ${customerId}`);
       return null;
     }

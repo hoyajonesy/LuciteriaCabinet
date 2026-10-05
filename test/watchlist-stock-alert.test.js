@@ -160,3 +160,174 @@ test("FR-6 robustness: displayLabel derived via canonical resolution from produc
   assert.doesNotMatch(email.text, /Lead|Pb/);
   assert.strictEqual(email.data.displayLabel, "Phosphorus (P)");
 });
+
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * FR-7 — Preference gate, self-load, and unsubscribe-token coverage.
+ *
+ * FR-7.6 moved the preference gate INTO sendWatchlistStockEmail so a direct
+ * call for an opted-out user always sends nothing, regardless of caller. The
+ * gate returns null and logs NOTHING when it blocks, so "no email" is asserted
+ * by confirming the recipient has no logged email. Each case uses a unique
+ * recipient so parallel history from other tests can't leak in.
+ * ────────────────────────────────────────────────────────────────────────── */
+import { mock } from "node:test";
+import { generateUnsubToken, verifyUnsubToken } from "../app/lib/unsub-token.server.js";
+
+test("gate: watchlistEmailAlerts=false blocks the email entirely", async () => {
+  const to = "gate-master-off@example.com";
+  const result = await sendWatchlistStockEmail({
+    to,
+    backInStock: true,
+    elementName: "Hydrogen",
+    elementSymbol: "H",
+    productTitle: "Hydrogen Gas Ampoule",
+    customerId: "cust-master-off",
+    prefs: { watchlistEmailAlerts: false },
+  });
+  assert.strictEqual(result, null, "gate should short-circuit and return null");
+  assert.strictEqual(latestEmailTo(to), undefined, "no email should be logged");
+});
+
+test("gate: back-in-stock blocked when watchlistEmailBackInStock=false", async () => {
+  const to = "gate-back-off@example.com";
+  const result = await sendWatchlistStockEmail({
+    to,
+    backInStock: true,
+    elementName: "Helium",
+    elementSymbol: "He",
+    productTitle: "Helium Ampoule",
+    customerId: "cust-back-off",
+    prefs: { watchlistEmailAlerts: true, watchlistEmailBackInStock: false },
+  });
+  assert.strictEqual(result, null);
+  assert.strictEqual(latestEmailTo(to), undefined, "no back-in-stock email");
+});
+
+test("gate: out-of-stock blocked when watchlistEmailOutOfStock=false", async () => {
+  const to = "gate-out-off@example.com";
+  const result = await sendWatchlistStockEmail({
+    to,
+    backInStock: false,
+    elementName: "Lithium",
+    elementSymbol: "Li",
+    productTitle: "Lithium Ampoule",
+    customerId: "cust-out-off",
+    prefs: { watchlistEmailAlerts: true, watchlistEmailOutOfStock: false },
+  });
+  assert.strictEqual(result, null);
+  assert.strictEqual(latestEmailTo(to), undefined, "no out-of-stock email");
+});
+
+test("gate: mutedUntil in the future blocks the email", async () => {
+  const to = "gate-muted@example.com";
+  const result = await sendWatchlistStockEmail({
+    to,
+    backInStock: true,
+    elementName: "Beryllium",
+    elementSymbol: "Be",
+    productTitle: "Beryllium Ampoule",
+    customerId: "cust-muted",
+    prefs: {
+      watchlistEmailAlerts: true,
+      watchlistEmailBackInStock: true,
+      mutedUntil: new Date(Date.now() + 60_000),
+    },
+  });
+  assert.strictEqual(result, null);
+  assert.strictEqual(latestEmailTo(to), undefined, "no email while muted");
+});
+
+test("gate: fully-opted-in prefs let the email through", async () => {
+  const to = "gate-allowed@example.com";
+  await sendWatchlistStockEmail({
+    to,
+    backInStock: true,
+    elementName: "Boron",
+    elementSymbol: "B",
+    productTitle: "Boron Ampoule",
+    inventoryQty: 3,
+    customerId: "cust-allowed",
+    prefs: {
+      watchlistEmailAlerts: true,
+      watchlistEmailBackInStock: true,
+      watchlistEmailOutOfStock: true,
+      mutedUntil: null,
+    },
+  });
+  const email = latestEmailTo(to);
+  assert.ok(email, "email should be logged when fully opted in");
+  assert.match(email.subject, /Boron \(B\)/);
+});
+
+test("gate self-load: opted-out prefs loaded via getPreferences block the email", async () => {
+  // When the caller passes customerId but no prefs, the gate self-loads them
+  // via a dynamic import of notifications-db.server.js. Mock that module so the
+  // loaded prefs say the user opted out of email — the email must be blocked.
+  mock.module("../app/lib/notifications-db.server.js", {
+    namedExports: {
+      getPreferences: async () => ({ watchlistEmailAlerts: false }),
+    },
+  });
+
+  const to = "gate-selfload-off@example.com";
+  const result = await sendWatchlistStockEmail({
+    to,
+    backInStock: true,
+    elementName: "Carbon",
+    elementSymbol: "C",
+    productTitle: "Carbon Ampoule",
+    customerId: "cust-selfload-off",
+    // no prefs — forces self-load
+  });
+  assert.strictEqual(result, null, "self-loaded opt-out should block");
+  assert.strictEqual(latestEmailTo(to), undefined, "no email after self-load opt-out");
+
+  mock.reset();
+});
+
+test("no customerId and no prefs: email sends (nothing to gate on)", async () => {
+  // Existing callers (and FR-6 tests) call without customerId/prefs; the gate is
+  // skipped and the email sends. This locks in that backwards-compatible path.
+  const to = "no-prefs-sends@example.com";
+  await sendWatchlistStockEmail({
+    to,
+    backInStock: true,
+    elementName: "Nitrogen",
+    elementSymbol: "N",
+    productTitle: "Nitrogen Ampoule",
+    inventoryQty: 2,
+  });
+  assert.ok(latestEmailTo(to), "email sends when there is nothing to gate on");
+});
+
+/* ── FR-7.5 — unsubscribe token generate/verify ───────────────────────────── */
+
+test("unsub token: generate produces a 64-char lowercase hex digest", () => {
+  process.env.UNSUB_SECRET = "test-unsub-secret";
+  const token = generateUnsubToken("user-123");
+  assert.match(token, /^[0-9a-f]{64}$/, "token is 64 hex chars");
+});
+
+test("unsub token: verify accepts the matching token", () => {
+  process.env.UNSUB_SECRET = "test-unsub-secret";
+  const token = generateUnsubToken("user-123");
+  assert.strictEqual(verifyUnsubToken("user-123", token), true);
+});
+
+test("unsub token: verify rejects a token for a different user", () => {
+  process.env.UNSUB_SECRET = "test-unsub-secret";
+  const token = generateUnsubToken("user-123");
+  assert.strictEqual(verifyUnsubToken("user-999", token), false);
+});
+
+test("unsub token: verify rejects a wrong-length token without throwing", () => {
+  process.env.UNSUB_SECRET = "test-unsub-secret";
+  assert.strictEqual(verifyUnsubToken("user-123", "deadbeef"), false);
+});
+
+test("unsub token: verify rejects a missing token", () => {
+  process.env.UNSUB_SECRET = "test-unsub-secret";
+  assert.strictEqual(verifyUnsubToken("user-123", ""), false);
+  assert.strictEqual(verifyUnsubToken("user-123", undefined), false);
+});

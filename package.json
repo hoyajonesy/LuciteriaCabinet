@@ -7,7 +7,7 @@
   "scripts": {
     "build": "remix vite:build",
     "postinstall": "prisma generate",
-    "vercel-build": "prisma generate && remix vite:build",
+    "vercel-build": "prisma migrate deploy && prisma generate && remix vite:build",
     "dev": "remix vite:dev",
     "dev:debug": "DEBUG=* remix vite:dev",
     "start": "remix-serve ./build/server/index.js",

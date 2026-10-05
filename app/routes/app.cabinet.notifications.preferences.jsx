@@ -64,6 +64,11 @@ export default function NotificationPreferences() {
   const fetcher = useFetcher();
   const saved = fetcher.data?.ok && fetcher.state === "idle";
 
+  // Should-fix 6: track the two master channel toggles so the per-event column
+  // toggles can be shown disabled when their master is off.
+  const [emailMasterOn, setEmailMasterOn] = useState(!!pref.watchlistEmailAlerts);
+  const [inAppMasterOn, setInAppMasterOn] = useState(!!pref.watchlistInAppAlerts);
+
   return (
     <div style={styles.layout}>
       <AppNav currentPath="/app/cabinet/notifications" userType={authUser.userType} isSubscriber={authUser.isSubscriber} />
@@ -107,28 +112,13 @@ export default function NotificationPreferences() {
               <span style={styles.colHead}>In-app</span>
               <span style={styles.colHead}>Email</span>
             </div>
-            <div style={styles.row}>
-              <div style={{ flex: 1 }}>
-                <div style={styles.rowLabel}>Back in stock</div>
-                <div style={styles.rowDesc}>When a wishlist item is back in stock</div>
-              </div>
-              <Toggle name="watchlistInAppBackInStock" defaultChecked={pref.watchlistInAppBackInStock} />
-              <Toggle name="watchlistEmailBackInStock" defaultChecked={pref.watchlistEmailBackInStock} />
-            </div>
-            <div style={styles.row}>
-              <div style={{ flex: 1 }}>
-                <div style={styles.rowLabel}>Out of stock</div>
-                <div style={styles.rowDesc}>When a wishlist item goes out of stock</div>
-              </div>
-              <Toggle name="watchlistInAppOutOfStock" defaultChecked={pref.watchlistInAppOutOfStock} />
-              <Toggle name="watchlistEmailOutOfStock" defaultChecked={pref.watchlistEmailOutOfStock} />
-            </div>
+            {/* Should-fix 6: master channel rows ABOVE the per-event rows. */}
             <div style={styles.row}>
               <div style={{ flex: 1 }}>
                 <div style={styles.rowLabel}>All wishlist in-app alerts</div>
                 <div style={styles.rowDesc}>Master switch for in-app wishlist stock alerts</div>
               </div>
-              <Toggle name="watchlistInAppAlerts" defaultChecked={pref.watchlistInAppAlerts} />
+              <Toggle name="watchlistInAppAlerts" defaultChecked={pref.watchlistInAppAlerts} onToggle={setInAppMasterOn} />
               <span style={{ width: 80 }} />
             </div>
             <div style={styles.row}>
@@ -137,7 +127,23 @@ export default function NotificationPreferences() {
                 <div style={styles.rowDesc}>Master switch for wishlist stock emails</div>
               </div>
               <span style={{ width: 80 }} />
-              <Toggle name="watchlistEmailAlerts" defaultChecked={pref.watchlistEmailAlerts} />
+              <Toggle name="watchlistEmailAlerts" defaultChecked={pref.watchlistEmailAlerts} onToggle={setEmailMasterOn} />
+            </div>
+            <div style={styles.row}>
+              <div style={{ flex: 1 }}>
+                <div style={styles.rowLabel}>Back in stock</div>
+                <div style={styles.rowDesc}>When a wishlist item is back in stock</div>
+              </div>
+              <Toggle name="watchlistInAppBackInStock" defaultChecked={pref.watchlistInAppBackInStock} disabled={!inAppMasterOn} />
+              <Toggle name="watchlistEmailBackInStock" defaultChecked={pref.watchlistEmailBackInStock} disabled={!emailMasterOn} />
+            </div>
+            <div style={styles.row}>
+              <div style={{ flex: 1 }}>
+                <div style={styles.rowLabel}>Out of stock</div>
+                <div style={styles.rowDesc}>When a wishlist item goes out of stock</div>
+              </div>
+              <Toggle name="watchlistInAppOutOfStock" defaultChecked={pref.watchlistInAppOutOfStock} disabled={!inAppMasterOn} />
+              <Toggle name="watchlistEmailOutOfStock" defaultChecked={pref.watchlistEmailOutOfStock} disabled={!emailMasterOn} />
             </div>
           </div>
 
@@ -149,6 +155,8 @@ export default function NotificationPreferences() {
               </div>
               <Toggle name="weeklyDigest" defaultChecked={pref.weeklyDigest} wide />
             </div>
+            {/* Should-fix 5: max-emails-per-week row hidden until Phase 2 enforces
+                the cap. The field still persists via its existing default on save.
             <div style={styles.row}>
               <div style={{ flex: 1 }}>
                 <div style={styles.rowLabel}>Max emails per week</div>
@@ -156,6 +164,7 @@ export default function NotificationPreferences() {
               </div>
               <input type="number" name="maxEmailsPerWeek" min="0" max="20" defaultValue={pref.maxEmailsPerWeek} style={styles.numberInput} />
             </div>
+            */}
           </div>
 
           <div style={styles.actions}>
@@ -170,11 +179,29 @@ export default function NotificationPreferences() {
   );
 }
 
-function Toggle({ name, defaultChecked, wide }) {
+function Toggle({ name, defaultChecked, wide, disabled, onToggle }) {
   const [on, setOn] = useState(!!defaultChecked);
+  const wrapStyle = {
+    ...styles.toggleWrap,
+    width: wide ? 120 : 80,
+    // Should-fix 6: when a master channel is off, its per-event toggles render
+    // visually disabled (dimmed + non-interactive) so an "on" toggle never
+    // contradicts an off master.
+    ...(disabled ? { opacity: 0.4, pointerEvents: "none" } : null),
+  };
   return (
-    <label style={{ ...styles.toggleWrap, width: wide ? 120 : 80 }}>
-      <input type="checkbox" name={name} checked={on} onChange={(e) => setOn(e.target.checked)} style={{ display: "none" }} />
+    <label style={wrapStyle} aria-disabled={disabled || undefined}>
+      <input
+        type="checkbox"
+        name={name}
+        checked={on}
+        disabled={disabled}
+        onChange={(e) => {
+          setOn(e.target.checked);
+          if (onToggle) onToggle(e.target.checked);
+        }}
+        style={{ display: "none" }}
+      />
       <span style={{ ...styles.toggleTrack, background: on ? "#1976D2" : "#ccc" }}>
         <span style={{ ...styles.toggleKnob, transform: on ? "translateX(18px)" : "translateX(0)" }} />
       </span>

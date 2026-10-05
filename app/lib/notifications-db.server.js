@@ -17,10 +17,12 @@ export const WATCHLIST_BACK_IN_STOCK = 'WATCHLIST_BACK_IN_STOCK';
 export const WATCHLIST_OUT_OF_STOCK = 'WATCHLIST_OUT_OF_STOCK';
 
 // Notification categories and which preference fields gate them.
-// Watchlist categories are gated in-app by the single `watchlistAlerts`
-// preference. Their `email` gate is null because email delivery for watchlist
-// stock changes is handled directly in the inventory webhook via
-// sendWatchlistStockEmail (fire-and-forget), not through notify()'s email path.
+// FR-7.1/7.2: watchlist categories are gated in-app by `watchlistInAppAlerts`
+// (the split per-channel master; the per-event-type in-app toggles are applied
+// by the webhook before notify() runs). Their `email` gate here is null because
+// watchlist email delivery goes through sendWatchlistStockEmail (fire-and-forget),
+// which enforces the email-side gate (master + event-type + mutedUntil) itself —
+// not through notify()'s email path.
 export const CATEGORIES = {
   MILESTONE: { inApp: 'inAppMilestone', email: 'emailMilestone', icon: '🏆' },
   NEAR_COMPLETION: { inApp: 'inAppNearCompletion', email: 'emailNearCompletion', icon: '🎯' },
